@@ -63,7 +63,8 @@ DaisyCloudSeed/
 │                          # serve.ts Bun.serve dev server (HTML import, HMR) + dist/ preview;
 │                          # bunfig.toml; toml-text-plugin.ts (dev server: .toml as text);
 │                          # *.test.ts(x) bun:test suites (`bun test`, happy-dom preloaded by
-│                          # test-setup.ts); dist/ is `bun build` output
+│                          # test-setup.ts); dist/ is `bun build` output; `make editor-html`
+│                          # inlines everything into one build/editor.html (Makefile)
 ├── CLAUDE.md              # This file - agent-facing project documentation
 ├── README.md              # User-facing control table and build/flash instructions
 ├── LICENSE                # MIT license (this fork, Erwin Coumans' Daisy port, CloudSeed)
@@ -726,7 +727,7 @@ Then `make libs` once (and after every submodule update), then `make`.
 
 ```bash
 # Rebuild all libraries (libcloudseed, DaisySP, libdaisy).
-# Makefile:125-128 runs `clean all` in each, so this is a full rebuild of all three.
+# Makefile:155-158 runs `clean all` in each, so this is a full rebuild of all three.
 make libs
 
 # Or build individually:
@@ -851,6 +852,10 @@ Located in `build/`:
 - **{target}.elf** - ELF executable with debug symbols
 - **{target}.hex** - Intel HEX format
 - **{target}.map** - Linker map file
+- **editor.html** - the browser editor as one stand-alone file (`make editor-html`: `bun build
+  ./index.html --compile --target=browser`, JS/CSS/presets.toml inlined; opens from `file://`).
+  A file rule over editor/src, editor/index.html, the package files and presets.toml, so it
+  rebuilds only when one of them changes
 
 This project builds with `APP_TYPE = BOOT_SRAM` (`Makefile:6`): the application is loaded into
 SRAM from QSPI flash by the Daisy bootloader, which is what allows room for all ten presets.
@@ -1678,6 +1683,7 @@ make               # Build CloudSeed
 make program-boot  # One time: flash the Daisy bootloader (BOOT_SRAM prerequisite)
 make program-dfu   # Flash the app (reset, hold BOOT until rapid blink, then run)
 make editor        # Browser preset editor: bun install + dev server (http://localhost:5174); needs Bun
+make editor-html   # Browser preset editor as one stand-alone file: build/editor.html (opens from file://)
 cd editor && bun test   # the editor's test suite (not part of make test)
 ```
 

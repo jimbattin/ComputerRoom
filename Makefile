@@ -122,18 +122,35 @@ test: $(HOST_TESTS)
 
 .PHONY: test
 
-# Browser preset editor (editor/): installs its packages from bun.lock, then runs the
-# dev server at http://localhost:5174 until Ctrl-C. Needs Bun, not the ARM toolchain.
+# Browser preset editor (editor/). Needs Bun, not the ARM toolchain.
 BUN ?= bun
 
-editor:
+define require_bun
 	@command -v $(BUN) >/dev/null 2>&1 || { \
 		echo "error: '$(BUN)' not found. The preset editor needs Bun 1.4.2 or newer." >&2; \
 		echo "Install it from https://bun.sh, e.g.: curl -fsSL https://bun.sh/install | bash" >&2; \
 		exit 1; }
+endef
+
+# Installs the editor's packages from bun.lock, then runs the dev server at
+# http://localhost:5174 until Ctrl-C.
+editor:
+	$(require_bun)
 	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run dev
 
-.PHONY: editor
+# The whole editor - JS, CSS and the repo's presets.toml (PROJECT) - inlined into one
+# stand-alone HTML file that a browser can open straight from disk.
+EDITOR_INPUTS = editor/index.html editor/package.json editor/bun.lock editor/tsconfig.json \
+                $(shell find editor/src -type f) presets.toml
+
+$(BUILD_DIR)/editor.html: $(EDITOR_INPUTS) | $(BUILD_DIR)
+	$(require_bun)
+	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run typecheck && \
+		$(BUN) build ./index.html --compile --target=browser --minify --outfile=$(CURDIR)/$@
+
+editor-html: $(BUILD_DIR)/editor.html
+
+.PHONY: editor editor-html
 
 libs:
 	$(MAKE) -C CloudSeed clean all

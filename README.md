@@ -12,7 +12,7 @@ MIT License.
 - Up to 16 slots available (10 are included in the example presets.toml)
 
 ## Browser-Based Preset Editor (via Web MIDI)
-Just plug into your Seed's USB port and pull up the editor on your browser. Don't want to flash a new presets.toml? No worries, there's an editor for that!
+Just plug into your Seed's USB port and pull up the editor on your browser. Don't want to flash a new presets.toml? No worries, there's an editor for that! This is available as a stand-alone file `editor.html` in the Release section. Your firmware version will need to align with the editor.
 
 ![Editor](docs/editor.png)
 - Supports Chrome and Firefox
@@ -180,6 +180,15 @@ bun run preview      # serves editor/dist/ at http://localhost:4174
 editor/dist/ uses relative asset paths, so it can be served from any directory, but only over
 `localhost` or HTTPS, for the same secure-context reason. A build embeds presets.toml as it was
 at build time: rebuild after editing it, or **PROJECT** loads the old bank.
+
+Or build the whole editor into one stand-alone file, from the repo root:
+```
+make editor-html     # bun install + type-check, then writes build/editor.html
+```
+build/editor.html has the JavaScript, CSS and presets.toml inlined and loads nothing else, so it
+can be opened straight from disk (`file://`) or copied anywhere. Chromium treats `file://` as a
+secure context, so Web MIDI is available there. It is rebuilt only when an editor source or
+presets.toml changes, and like dist/ it carries presets.toml as it was at build time.
 
 Checks (not part of `make test`):
 ```
