@@ -148,7 +148,12 @@ field of a preset bank and talks to the pedal over Web MIDI. It runs in current 
 Firefox. Building it does not involve the firmware toolchain; it needs [Bun](https://bun.sh)
 1.4.2 or newer, which installs the packages, serves, bundles and tests it (no Node.js or npm).
 
-Run it from source (development server):
+Run it from source (development server), from the repo root:
+```
+make editor          # bun install from bun.lock, then http://localhost:5174 (Ctrl-C stops it)
+```
+It stops with a pointer to https://bun.sh if `bun` is not on the PATH (`make editor BUN=/path/to/bun`
+picks another binary). The same by hand:
 ```
 cd editor
 bun install          # once, and after package.json changes

@@ -310,7 +310,7 @@ export function FlowPanel({ preset, page, focusKey, pinned, onBlock }: FlowPanel
       </div>
       {open && (
         <div class="flow-body">
-          <svg viewBox="0 0 1000 300" width="100%" role="img" aria-label="CloudSeed signal flow">
+          <svg viewBox="0 0 1000 300" width="100%" role="img" aria-label="Computer Room signal flow">
             <defs>
               <marker id="flow-arrow" viewBox="0 0 6 6" refX="6" refY="3" markerWidth="6" markerHeight="6" orient="auto">
                 <path d="M0,0 L6,3 L0,6 z" />

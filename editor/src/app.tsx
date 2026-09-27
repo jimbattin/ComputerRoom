@@ -186,7 +186,11 @@ export function App() {
   return (
     <main class="larc">
       <div class="header">
-        <div class="brand">CLOUDSEED</div>
+        <div class="brand">
+          COMPUTER
+          <br />
+          ROOM
+        </div>
         <div class="main-display">
           <Led wide text={display} />
           <Led small off={!dirty && !origin} text={[dirty ? 'EDITED' : '', origin].filter(Boolean).join('  ') || '-'} />

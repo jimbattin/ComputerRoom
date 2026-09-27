@@ -1677,7 +1677,8 @@ make test          # Host unit tests (knob/toggle/footswitch state machines, pre
 make               # Build CloudSeed
 make program-boot  # One time: flash the Daisy bootloader (BOOT_SRAM prerequisite)
 make program-dfu   # Flash the app (reset, hold BOOT until rapid blink, then run)
-cd editor && bun install && bun run dev   # Browser preset editor (http://localhost:5174); bun test runs its suite
+make editor        # Browser preset editor: bun install + dev server (http://localhost:5174); needs Bun
+cd editor && bun test   # the editor's test suite (not part of make test)
 ```
 
 ### File Locations

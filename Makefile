@@ -122,6 +122,19 @@ test: $(HOST_TESTS)
 
 .PHONY: test
 
+# Browser preset editor (editor/): installs its packages from bun.lock, then runs the
+# dev server at http://localhost:5174 until Ctrl-C. Needs Bun, not the ARM toolchain.
+BUN ?= bun
+
+editor:
+	@command -v $(BUN) >/dev/null 2>&1 || { \
+		echo "error: '$(BUN)' not found. The preset editor needs Bun 1.4.2 or newer." >&2; \
+		echo "Install it from https://bun.sh, e.g.: curl -fsSL https://bun.sh/install | bash" >&2; \
+		exit 1; }
+	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run dev
+
+.PHONY: editor
+
 libs:
 	$(MAKE) -C CloudSeed clean all
 	$(MAKE) -C DaisySP clean all
