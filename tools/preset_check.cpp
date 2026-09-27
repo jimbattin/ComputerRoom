@@ -1,0 +1,190 @@
+// Host-side check that presets.toml is accepted by the firmware's own parser.
+// Usage: preset_check --validate|--print-knob-map|--print-toggle-map <presets.toml>
+// --validate          prints a one-line summary; exits 1 (with the parser's error
+//                     message on stderr) if the pedal would reject the file.
+// --print-knob-map    prints the resolved knob assignments of every preset.
+// --print-toggle-map  prints the resolved toggle assignments of every preset.
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "CloudSeed/ParameterNames.h"
+#include "preset_bank.h"
+
+static char* readFile(const char* path, size_t& length)
+{
+    FILE* fp = fopen(path, "rb");
+    if (!fp)
+    {
+        fprintf(stderr, "cannot open %s\n", path);
+        return NULL;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    const long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (size < 0)
+    {
+        fprintf(stderr, "cannot size %s\n", path);
+        fclose(fp);
+        return NULL;
+    }
+
+    char* buffer = (char*)malloc((size_t)size + 1);
+    if (!buffer)
+    {
+        fprintf(stderr, "out of memory reading %s\n", path);
+        fclose(fp);
+        return NULL;
+    }
+
+    length = fread(buffer, 1, (size_t)size, fp);
+    fclose(fp);
+    return buffer;
+}
+
+// Mirror of the firmware's parse arena (TOML_ARENA_SIZE and
+// toml_arena_alloc in src/sdram_pool.cpp): same size, same 8-byte alignment,
+// no reuse on free. Host pointers are 64-bit, so tomlc99's node allocations are
+// at least as large here as on the 32-bit target: fitting here implies fitting
+// on the pedal.
+static const size_t kArenaSize = 512 * 1024;
+static char         gArena[kArenaSize];
+static size_t       gArenaIndex = 0;
+static size_t       gArenaPeak  = 0;
+
+static void* arenaAlloc(size_t size)
+{
+    const size_t aligned = (size + 7u) & ~(size_t)7u;
+    if (gArenaIndex + aligned > kArenaSize)
+    {
+        fprintf(stderr,
+                "boot parse arena exhausted: needs more than %zu bytes "
+                "(TOML_ARENA_SIZE, src/sdram_pool.cpp)\n",
+                kArenaSize);
+        exit(1);
+    }
+
+    void* ptr = &gArena[gArenaIndex];
+    gArenaIndex += aligned;
+    if (gArenaIndex > gArenaPeak)
+        gArenaPeak = gArenaIndex;
+    return ptr;
+}
+
+static void arenaFree(void*) {}
+
+static const char* toggleTargetName(const ToggleTarget& t)
+{
+    switch (t.kind)
+    {
+        case ToggleTarget_DelayLinesMax: return "delay_lines.max";
+        case ToggleTarget_ReverseEnabled: return "reverse.enabled";
+        case ToggleTarget_ReverseDirectMix: return "reverse.direct_mix";
+        case ToggleTarget_Param: break;
+    }
+    return kParameterNames[t.paramIndex];
+}
+
+int main(int argc, char** argv)
+{
+    enum Mode
+    {
+        Mode_None,
+        Mode_Validate,
+        Mode_PrintKnobMap,
+        Mode_PrintToggleMap
+    } mode           = Mode_None;
+    const char* path = NULL;
+    bool        bad  = false;
+
+    for (int i = 1; i < argc; i++)
+    {
+        Mode flag = Mode_None;
+        if (strcmp(argv[i], "--validate") == 0)
+            flag = Mode_Validate;
+        else if (strcmp(argv[i], "--print-knob-map") == 0)
+            flag = Mode_PrintKnobMap;
+        else if (strcmp(argv[i], "--print-toggle-map") == 0)
+            flag = Mode_PrintToggleMap;
+
+        if (flag != Mode_None)
+        {
+            if (mode != Mode_None)
+                bad = true;
+            mode = flag;
+        }
+        else if (!path)
+            path = argv[i];
+        else
+            bad = true;
+    }
+
+    if (bad || mode == Mode_None || !path)
+    {
+        fprintf(stderr,
+                "usage: %s --validate|--print-knob-map|--print-toggle-map "
+                "<presets.toml>\n",
+                argv[0]);
+        return 2;
+    }
+
+    size_t length = 0;
+    char*  text   = readFile(path, length);
+    if (!text)
+        return 2;
+
+    // The same call the firmware makes through ParsePresetText(): the full file length
+    // (so a NUL byte is rejected here, as at boot), with the scratch copy as the arena's
+    // first allocation.
+    PresetBank bank;
+    char       err[192];
+    const bool ok = ParsePresetBankText(text, (uint32_t)length, bank, err, sizeof err,
+                                        arenaAlloc, arenaFree);
+    free(text);
+    if (!ok)
+    {
+        fprintf(stderr, "%s: %s\n", path, err);
+        return 1;
+    }
+
+    static const char* const kBankSuffix[2] = {"a", "b"};
+    if (mode == Mode_PrintKnobMap)
+    {
+        for (int p = 0; p < bank.count; p++)
+        {
+            for (int b = 0; b < kControlBanks; b++)
+            {
+                for (int k = 0; k < kKnobCount; k++)
+                {
+                    const KnobTarget& t = bank.presets[p].knobMap[b][k];
+                    printf("preset %d knob%d_%s = %s\n", p, k + 1, kBankSuffix[b],
+                           t.kind == KnobTarget_ReverseDelay
+                               ? "reverse.delay"
+                               : kParameterNames[t.paramIndex]);
+                }
+            }
+        }
+        return 0;
+    }
+
+    if (mode == Mode_PrintToggleMap)
+    {
+        for (int p = 0; p < bank.count; p++)
+        {
+            for (int b = 0; b < kControlBanks; b++)
+            {
+                for (int t = 0; t < kToggleCount; t++)
+                    printf("preset %d toggle%d_%s = %s\n", p, t + 1,
+                           kBankSuffix[b],
+                           toggleTargetName(bank.presets[p].toggleMap[b][t]));
+            }
+        }
+        return 0;
+    }
+
+    printf("%s: %d presets valid, boot arena peak %zu of %zu bytes\n", path,
+           bank.count, gArenaPeak, kArenaSize);
+    return 0;
+}

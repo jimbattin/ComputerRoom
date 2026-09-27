@@ -17,12 +17,10 @@ namespace CloudSeed
 	private:
 		int samplerate;
 
-		vector<ModulatedAllpass*> filters;
+		vector<ModulatedAllpass*> filters;  // filled once, in the constructor
 		int delay;
 		float modRate;
-		vector<float> seedValues;
-		int seed;
-		float crossSeed;
+		AudioLib::SeedSeries<MaxStageCount * 3> seeds;  // delay, mod amount, mod rate per stage
 		
 	public:
 		int Stages;
@@ -35,9 +33,12 @@ namespace CloudSeed
 				filters.push_back(new ModulatedAllpass((int)delayBufferSize, 100));
 			}
 
-			crossSeed = 0.0;
-			seed = 23456;
-			UpdateSeeds();
+			// Update() and SetSamplerate() read these before any preset sets them:
+			// start from the filters' own defaults (100-sample delay, no modulation).
+			delay = 100;
+			modRate = 0.0f;
+			seeds.SetSeed(23456);
+			Update();
 			Stages = 1;
 
 			SetSamplerate(samplerate);
@@ -62,14 +63,14 @@ namespace CloudSeed
 
 		void SetSeed(int seed)
 		{
-			this->seed = seed;
-			UpdateSeeds();
+			seeds.SetSeed(seed);
+			Update();
 		}
 
 		void SetCrossSeed(float crossSeed)
 		{
-			this->crossSeed = crossSeed;
-			UpdateSeeds();
+			seeds.SetCrossSeed(crossSeed);
+			Update();
 		}
 
 
@@ -110,9 +111,9 @@ namespace CloudSeed
 
 		void SetModAmount(float amount)
 		{
-			for (int i = 0; i < filters.size(); i++)
+			for (size_t i = 0; i < filters.size(); i++)
 			{
-				filters[i]->ModAmount = amount * (0.85 + 0.3 * seedValues[MaxStageCount + i]);
+				filters[i]->ModAmount = amount * (0.85 + 0.3 * seeds[MaxStageCount + i]);
 			}
 		}
 
@@ -121,7 +122,7 @@ namespace CloudSeed
 			modRate = rate;
 
 			for (size_t i = 0; i < filters.size(); i++)
-				filters[i]->ModRate = rate * (0.85 + 0.3 * seedValues[MaxStageCount * 2 + i]) / samplerate;
+				filters[i]->ModRate = rate * (0.85 + 0.3 * seeds[MaxStageCount * 2 + i]) / samplerate;
 		}
 
 		void Process(float* input, int sampleCount)
@@ -147,16 +148,10 @@ namespace CloudSeed
 		{
 			for (size_t i = 0; i < filters.size(); i++)
 			{
-				auto r = seedValues[i];
+				auto r = seeds[i];
 				auto d = std::pow(10, r) * 0.1; // 0.1 ... 1.0
 				filters[i]->SampleDelay = (int)(delay * d);
 			}
-		}
-
-		void UpdateSeeds()
-		{
-			this->seedValues = AudioLib::ShaRandom::Generate(seed, MaxStageCount * 3, crossSeed);
-			Update();
 		}
 
 	};

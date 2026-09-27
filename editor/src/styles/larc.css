@@ -1,0 +1,647 @@
+/* Lexicon 480L LARC look on top of Pico CSS. No web fonts, no images. */
+
+/* Always reserve the scrollbar's width: content that grows past the window (the flow
+   explainer, a page change) must not narrow the page and shift the controls under the cursor. */
+html {
+  scrollbar-gutter: stable;
+}
+
+:root[data-theme='dark'] {
+  --pico-background-color: #141516;
+  --pico-color: #c9c9c9;
+  --pico-primary: #ff3b1f;
+  --pico-primary-hover: #ff5a40;
+  --pico-font-family: system-ui, sans-serif;
+  --pico-border-radius: 2px;
+
+  --larc-chassis: #1b1c1e;
+  --larc-panel: #26282b;
+  --larc-bezel: #070707;
+  --larc-led: #ff3b1f;
+  --larc-led-glow: 0 0 6px rgba(255, 59, 31, 0.75);
+  --larc-led-off: #3a0f09;
+  --larc-key: #d9d4c7;
+  --larc-key-text: #1b1c1e;
+  --larc-key-dark: #3a3d41;
+  --larc-silk: #e6e6e6;
+  --larc-mono: ui-monospace, 'DejaVu Sans Mono', Menlo, monospace;
+  --larc-edit: #f0a830;
+}
+
+.larc {
+  max-width: 1200px;
+  margin: 1rem auto;
+  padding: 1rem;
+  background: var(--larc-chassis);
+  border: 2px solid #34363a;
+  border-bottom-color: #0c0c0d;
+  border-right-color: #0c0c0d;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.larc .panel {
+  background: var(--larc-panel);
+  border-radius: 3px;
+  padding: 0.75rem;
+}
+
+.larc .silk {
+  color: var(--larc-silk);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.larc .brand {
+  color: var(--larc-silk);
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  font-size: 1.1rem;
+}
+
+/* Header: brand, main display, device panel. */
+.larc .header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+}
+
+.larc .main-display {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.larc .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.75rem 0;
+}
+
+.larc .body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.larc .hint {
+  color: var(--larc-silk);
+  padding: 2rem;
+}
+
+/* LED display window. */
+.led {
+  background: var(--larc-bezel);
+  color: var(--larc-led);
+  text-shadow: var(--larc-led-glow);
+  font-family: var(--larc-mono);
+  letter-spacing: 0.08em;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.9);
+  border: 1px solid #000;
+  border-radius: 2px;
+  padding: 0.3rem 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 1.9rem;
+}
+
+.led.wide {
+  font-size: 1.6rem;
+  padding: 0.5rem 0.75rem;
+  min-height: 3rem;
+}
+
+.led.small {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  min-height: 1.3rem;
+}
+
+.led.off {
+  color: var(--larc-led-off);
+  text-shadow: none;
+}
+
+/* Form controls rendered as LED windows. */
+.larc input.led,
+.larc select.led {
+  margin: 0;
+  height: auto;
+  font-size: 0.8rem;
+  --pico-form-element-background-color: var(--larc-bezel);
+  --pico-form-element-border-color: #000;
+  --pico-form-element-color: var(--larc-led);
+  color: var(--larc-led);
+  background-color: var(--larc-bezel);
+}
+
+.larc select.led option,
+.larc select.led optgroup {
+  color: var(--larc-led);
+  background: var(--larc-bezel);
+}
+
+/* Ivory LARC key with an indicator LED. */
+.larc .key {
+  position: relative;
+  width: 3.2rem;
+  height: 2.2rem;
+  margin: 0;
+  padding: 0.5rem 0.1rem 0.1rem;
+  background: var(--larc-key);
+  color: var(--larc-key-text);
+  border: 1px solid #8f8a7f;
+  border-bottom-width: 3px;
+  border-radius: 3px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  box-shadow: none;
+}
+
+.larc .key:active:not(:disabled) {
+  border-bottom-width: 1px;
+  transform: translateY(2px);
+}
+
+.larc .key.dark {
+  background: var(--larc-key-dark);
+  color: var(--larc-silk);
+  border-color: #1e2022;
+}
+
+.larc .key.wide {
+  width: 4.6rem;
+}
+
+.larc .key:disabled {
+  opacity: 0.35;
+}
+
+.larc .key .key-led {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--larc-led-off);
+}
+
+.larc .key[aria-pressed='true'] .key-led {
+  background: var(--larc-led);
+  box-shadow: var(--larc-led-glow);
+}
+
+/* Edit mark: differs from the bank as last loaded or saved. Dot = changed, ring = preset added. */
+.larc .edit-mark {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--larc-edit);
+  pointer-events: none;
+}
+
+.larc .key.added .edit-mark {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--larc-edit);
+}
+
+.larc .strip,
+.larc .setup-grid label,
+.larc .bank-chip {
+  position: relative;
+}
+
+.larc .strip:has(> .edit-mark) > .silk,
+.larc .setup-grid label:has(> .edit-mark) {
+  color: var(--larc-edit);
+}
+
+/* Program keys: 4 x 4 grid plus DUP / DEL. */
+.larc .program-keys {
+  display: grid;
+  grid-template-columns: repeat(4, 3.2rem);
+  gap: 0.4rem;
+}
+
+.larc .page-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Device panel. */
+.larc .device {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 15rem;
+}
+
+.larc .device .keys {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.larc .status-led {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  background: var(--larc-led-off);
+}
+
+.larc .status-led.on {
+  background: var(--larc-led);
+  box-shadow: var(--larc-led-glow);
+}
+
+/* Fader bank. */
+.larc .fader-bank {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.larc .strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--larc-panel);
+  border-radius: 3px;
+  padding: 0.5rem 0.4rem;
+  min-height: 19rem;
+}
+
+.larc .strip .led {
+  width: 100%;
+  text-align: center;
+  font-size: 0.8rem;
+}
+
+.larc .strip .badges {
+  min-height: 1rem;
+  font-family: var(--larc-mono);
+  font-size: 0.6rem;
+  color: var(--larc-led);
+}
+
+.larc .strip input[type='number'] {
+  width: 100%;
+  margin: 0;
+  padding: 0.15rem 0.3rem;
+  height: auto;
+  font-size: 0.75rem;
+  font-family: var(--larc-mono);
+}
+
+.larc .strip .switch-slot {
+  height: 11rem;
+  display: flex;
+  align-items: center;
+}
+
+/* Vertical fader: max at the top. Thumb and track are styled identically for both engines. */
+.larc .strip input[type='range'] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 2rem;
+  height: 11rem;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: ns-resize;
+}
+
+.larc .strip input[type='range']::-webkit-slider-runnable-track {
+  width: 6px;
+  height: 100%;
+  background: #0a0a0a;
+  border-radius: 3px;
+  box-shadow: inset 0 0 3px #000;
+}
+
+.larc .strip input[type='range']::-moz-range-track {
+  width: 6px;
+  height: 100%;
+  background: #0a0a0a;
+  border-radius: 3px;
+  box-shadow: inset 0 0 3px #000;
+}
+
+.larc .strip input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.8rem;
+  height: 1rem;
+  margin-left: calc((6px - 1.8rem) / 2);
+  background-color: #1a1a1a;
+  background-image: linear-gradient(#fff, #fff);
+  background-size: 100% 2px;
+  background-position: center;
+  background-repeat: no-repeat;
+  border: 1px solid #444;
+  border-radius: 2px;
+}
+
+.larc .strip input[type='range']::-moz-range-thumb {
+  width: 1.8rem;
+  height: 1rem;
+  background-color: #1a1a1a;
+  background-image: linear-gradient(#fff, #fff);
+  background-size: 100% 2px;
+  background-position: center;
+  background-repeat: no-repeat;
+  border: 1px solid #444;
+  border-radius: 2px;
+}
+
+.larc .strip.empty {
+  background: transparent;
+  border: 1px dashed #2e3033;
+}
+
+/* Knob / toggle map and setup pages. */
+.larc .map-grid {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.larc .map-grid.knobs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.larc .map-grid.toggles {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.larc .map-col select.led {
+  font-size: 0.75rem;
+  padding: 0.35rem 2rem 0.35rem 0.5rem;
+}
+
+.larc .map-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* A (primary, `_a`) / B (secondary, `_b`, FS2 held) chips: ivory and dark like the two key colours. */
+.larc .map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.larc .map-slot {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.larc .map-slot select.led {
+  flex: 1;
+  min-width: 0;
+}
+
+.larc .bank-chip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 1px solid;
+  border-bottom-width: 3px;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.larc .bank-a .bank-chip {
+  background: var(--larc-key);
+  color: var(--larc-key-text);
+  border-color: #8f8a7f;
+}
+
+.larc .bank-b .bank-chip {
+  background: var(--larc-key-dark);
+  color: var(--larc-silk);
+  border-color: #1e2022;
+}
+
+.larc .bank-chip .edit-mark {
+  top: 2px;
+  right: 2px;
+}
+
+.larc .map-legend strong {
+  color: var(--larc-silk);
+}
+
+.larc .setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+
+.larc .setup-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+/* Signal flow */
+
+.larc .flow {
+  margin-top: 0.75rem;
+}
+
+.larc .flow-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.larc .flow-note {
+  flex: 1;
+  font-size: 0.65rem;
+  color: #8a8d91;
+}
+
+/* A fixed height, so hovering a block never changes the page height: a resize that moved the
+   diagram out from under the cursor ended the hover, which resized it back, in a loop. The
+   tallest explainer (E.DIFF) fits from 800 px wide up; narrower windows scroll inside it. */
+.larc .flow-explain {
+  height: 21rem;
+  overflow-y: auto;
+}
+
+.larc .flow-body {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.larc .flow svg {
+  display: block;
+  background: var(--larc-bezel);
+  border-radius: 3px;
+}
+
+.larc .flow svg text {
+  font-family: var(--larc-mono);
+}
+
+.larc .blk rect,
+.larc .blk polygon {
+  fill: #1f2124;
+  stroke: #55595e;
+  stroke-width: 1.2;
+}
+
+.larc .blk {
+  cursor: pointer;
+}
+
+.larc .blk:focus {
+  outline: none;
+}
+
+.larc .blk .t {
+  fill: var(--larc-silk);
+  font-size: 10px;
+}
+
+.larc .flow .v {
+  fill: var(--larc-led);
+  font-size: 9px;
+}
+
+.larc .bdg {
+  fill: var(--larc-led);
+  font-size: 8px;
+}
+
+.larc .blk.hl rect,
+.larc .blk.hl polygon {
+  stroke: var(--larc-led);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 3px rgba(255, 59, 31, 0.6));
+}
+
+.larc .blk.focus rect,
+.larc .blk.focus polygon {
+  fill: #2c2e32;
+}
+
+.larc .blk.off {
+  opacity: 0.4;
+}
+
+.larc .blk.off rect {
+  stroke-dasharray: 4 3;
+}
+
+.larc .blk[data-block='lines'] rect {
+  fill: none;
+}
+
+.larc .stack {
+  fill: var(--larc-bezel);
+  stroke: #3a3d41;
+}
+
+.larc .stack-mask {
+  fill: var(--larc-bezel);
+}
+
+.larc .wire {
+  fill: none;
+  stroke: #7a7e84;
+  stroke-width: 1.5;
+}
+
+.larc .wire.dim {
+  stroke-dasharray: 3 3;
+  opacity: 0.35;
+}
+
+.larc #flow-arrow path,
+.larc .dot {
+  fill: #7a7e84;
+}
+
+.larc .sum {
+  fill: #1f2124;
+  stroke: #7a7e84;
+}
+
+.larc .sum-plus {
+  fill: var(--larc-silk);
+  font-size: 12px;
+  text-anchor: middle;
+}
+
+.larc .flow-explain h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--larc-silk);
+  display: inline-block;
+}
+
+.larc .flow-state {
+  margin-left: 0.6rem;
+  font-family: var(--larc-mono);
+  font-size: 0.7rem;
+  color: var(--larc-led);
+}
+
+.larc .flow-explain p {
+  font-size: 0.8rem;
+  margin: 0.3rem 0;
+  max-width: 70ch;
+}
+
+.larc .flow-params {
+  font-size: 0.75rem;
+  margin: 0.4rem 0 0;
+}
+
+.larc .flow-params td {
+  padding: 0.15rem 0.5rem;
+  border-bottom-color: #34363a;
+}
+
+.larc .flow-params td:nth-child(2),
+.larc .flow-params td:nth-child(3) {
+  font-family: var(--larc-mono);
+  color: var(--larc-led);
+  white-space: nowrap;
+}
+
+.larc .flow-params tr.focus td {
+  background: #2c2e32;
+}

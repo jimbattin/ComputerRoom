@@ -4,6 +4,7 @@
 
 #include <memory>
 #include "Parameter.h"
+#include "DelayLineCount.h"
 #include "ModulatedDelay.h"
 #include "MultitapDiffuser.h"
 #include "AudioLib/ShaRandom.h"
@@ -32,12 +33,6 @@ namespace CloudSeed
 	class ReverbChannel
 	{
 	private:
-                // IMPORTANT: CHANGE "TotalLineCount" FOR DAISY SEED HARDWARE
-                //            Original CloudSeed plugin uses 8 Delay Lines, or 12 delay lines?
-                //            DaisyCloudSeed adjusted to 2 to use with Stereo on DaisyPatch hardware (otherwise causes buffer underruns for most presets (except ChorusDelay)
-                //            4/26/2023 GuitarML fork of DaisyCloudSeed uses 4, able to increase for Mono Only Terrarium platform (mono guitar pedal using Daisy Seed)
-		static const int TotalLineCount = 5;  
-
 		float parameters[(int)Parameter::Count];
 		int samplerate;
 		int bufferSize;
@@ -46,13 +41,12 @@ namespace CloudSeed
 		MultitapDiffuser multitap;
 		AllpassDiffuser diffuser;
 		vector<DelayLine*> lines;
-		AudioLib::ShaRandom rand;
+		AudioLib::SeedSeries<TotalLineCount * 3> lineSeeds;  // delay, mod amount, mod rate per line
 		AudioLib::Hp1 highPass;
 		AudioLib::Lp1 lowPass;
 		float* tempBuffer;
 		float* lineOutBuffer;
 		float* outBuffer;
-		int delayLineSeed;
 		int postDiffusionSeed;
 
 		// Used the the main process loop
@@ -72,11 +66,11 @@ namespace CloudSeed
 	public:
 		
 		ReverbChannel(int bufferSize, int samplerate, ChannelLR leftOrRight)
-			: preDelay(bufferSize, (int)(samplerate * 1.0), 100) // 1 second delay buffer
+			: preDelay(bufferSize, samplerate + 2, 100) // 1000 ms max PreDelay + 2: ModulatedDelay reads SampleDelay and SampleDelay + 1 behind the write index
 			, multitap(samplerate) // use samplerate = 1 second delay buffer
+			, diffuser(samplerate, 150) // 150ms buffer, to allow for 100ms + modulation time
 			, highPass(samplerate)
 			, lowPass(samplerate)
-			, diffuser(samplerate, 150) // 150ms buffer, to allow for 100ms + modulation time
 		{
 			this->channelLr = leftOrRight;
 
@@ -88,6 +82,13 @@ namespace CloudSeed
 			for (auto value = 0; value < (int)Parameter::Count; value++)
 				this->parameters[value] = 0.0f;
 
+			// A defined starting state. LoadPreset() sets every one of these, but
+			// SetParameter(DiffusionEnabled) compares against the old value first.
+			// The ReverbController is heap-allocated, so nothing is zeroed.
+			diffuserEnabled = false;
+			highPassEnabled = false;
+			lowPassEnabled = false;
+			postDiffusionSeed = 0;
 			crossSeed = 0.0;
 			lineCount = TotalLineCount;
 			perLineGain = 1.0f / std::sqrt((float)lineCount);
@@ -123,7 +124,7 @@ namespace CloudSeed
 			highPass.SetSamplerate(samplerate);
 			lowPass.SetSamplerate(samplerate);
 
-			for (int i = 0; i < lines.size(); i++)
+			for (size_t i = 0; i < lines.size(); i++)
 			{
 				lines[i]->SetSamplerate(samplerate);
 			}
@@ -157,6 +158,12 @@ namespace CloudSeed
 
 			switch (para)
 			{
+			// Stored to parameters[] above; no per-channel action in the mono fork.
+			// (InputMix L/R mixing is disabled — see ReverbController.h GetScaledParameter.)
+			case Parameter::InputMix:
+			case Parameter::Unused:
+			case Parameter::Count:
+				break;
 			case Parameter::PreDelay:
 				preDelay.SampleDelay = (int)Ms2Samples(value);
 				break;
@@ -179,8 +186,8 @@ namespace CloudSeed
 			case Parameter::TapDecay:
 				multitap.SetTapDecay(value);
 				break;
-			case Parameter::isReverse:
-				multitap.SetReverseDecay((bool)value);
+			case Parameter::Bloom:
+				multitap.SetBloom((bool)value);
 				break;
 
 			case Parameter::DiffusionEnabled:
@@ -202,7 +209,14 @@ namespace CloudSeed
 				break;
 
 			case Parameter::LineCount:
+				// Only TotalLineCount lines exist, and at least one must run:
+				// ReverbController::LoadPreset() re-applies the stored LineCount, which
+				// is 0 until the audio callback first sets the real count.
 				lineCount = (int)value;
+				if (lineCount < 1)
+					lineCount = 1;
+				if (lineCount > TotalLineCount)
+					lineCount = TotalLineCount;
 				perLineGain = 1.0f / std::sqrt((float)lineCount);
 				break;
 			case Parameter::LineDelay:
@@ -282,7 +296,7 @@ namespace CloudSeed
 				diffuser.SetSeed((int)value);
 				break;
 			case Parameter::DelaySeed:
-				delayLineSeed = (int)value;
+				lineSeeds.SetSeed((int)value);
 				UpdateLines();
 				break;
 			case Parameter::PostDiffusionSeed:
@@ -293,6 +307,7 @@ namespace CloudSeed
 			case Parameter::CrossSeed:
 
 				crossSeed = channelLr == ChannelLR::Right ? value : 0;
+				lineSeeds.SetCrossSeed(crossSeed);
 				multitap.SetCrossSeed(value);
 				diffuser.SetCrossSeed(value);
 				UpdateLines();
@@ -448,15 +463,14 @@ namespace CloudSeed
 			auto lateDiffusionModAmount = Ms2Samples(parameters[(int)Parameter::LateDiffusionModAmount]);
 			auto lateDiffusionModRate = parameters[(int)Parameter::LateDiffusionModRate];
 
-			auto delayLineSeeds = ShaRandom::Generate(delayLineSeed, (int)lines.size() * 3, crossSeed);
-			int count = (int)lines.size();
+			int count = (int)lines.size();  // TotalLineCount; lineSeeds holds 3 values per line
 
 			for (int i = 0; i < count; i++)
 			{
-				auto modAmount = lineModAmount * (0.7 + 0.3 * delayLineSeeds[i + count]);
-				auto modRate = lineModRate * (0.7 + 0.3 * delayLineSeeds[i + 2 * count]) / samplerate;
+				auto modAmount = lineModAmount * (0.7 + 0.3 * lineSeeds[i + count]);
+				auto modRate = lineModRate * (0.7 + 0.3 * lineSeeds[i + 2 * count]) / samplerate;
 				
-				auto delaySamples = (0.5 + 1.0 * delayLineSeeds[i]) * lineDelaySamples;
+				auto delaySamples = (0.5 + 1.0 * lineSeeds[i]) * lineDelaySamples;
 				if (delaySamples < modAmount + 2) // when the delay is set really short, and the modulation is very high
 					delaySamples = modAmount + 2; // the mod could actually take the delay time negative, prevent that! -- provide 2 extra sample as margin of safety
 
@@ -476,7 +490,7 @@ namespace CloudSeed
 
 		void UpdatePostDiffusion()
 		{
-			for (int i = 0; i < lines.size(); i++)
+			for (size_t i = 0; i < lines.size(); i++)
 				lines[i]->SetDiffuserSeed(((long long)postDiffusionSeed) * (i + 1), crossSeed);
 		}
 

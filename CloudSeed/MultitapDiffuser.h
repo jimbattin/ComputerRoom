@@ -1,18 +1,10 @@
 #ifndef MULTITAPDIFFUSER
 #define MULTITAPDIFFUSER
 
-#include <vector>
-#include <memory>
-#include <array>
-#include "MultitapDiffuser.h"
-#include "Utils.h"
 #include "AudioLib/ShaRandom.h"
-extern void* custom_pool_allocate(size_t size);
 
 namespace CloudSeed
 {
-	using namespace std;
-
 	class MultitapDiffuser
 	{
 	public:
@@ -24,200 +16,45 @@ namespace CloudSeed
 		int len;
 
 		int index;
-		vector<float> tapGains;
-		vector<int> tapPosition;
-		vector<float> seedValues;
-		int seed;
-		float crossSeed;
+		// Update() fills these, Process() plays the *Temp copies (swapped in on isDirty).
+		// Fixed MaxTaps size: a knob write must not allocate.
+		float tapGains[MaxTaps];
+		int tapPosition[MaxTaps];
+		AudioLib::SeedSeries<2 * MaxTaps> seeds;  // Update() draws two values per tap
 		int count;
 		float length;
 		float gain;
 		float decay;
 
 		bool isDirty;
-		bool isReverse;
-		vector<float> tapGainsTemp;
-		vector<int> tapPositionTemp;
+		bool bloom;
+		float tapGainsTemp[MaxTaps];
+		int tapPositionTemp[MaxTaps];
 		int countTemp;
 
 	public:
-		MultitapDiffuser(int delayBufferSize)
-		{
-			len = delayBufferSize;
-			buffer = new (custom_pool_allocate(sizeof(float) * delayBufferSize)) float[delayBufferSize];
-			output = new (custom_pool_allocate(sizeof(float) * delayBufferSize)) float[delayBufferSize];
-			index = 0;
-			count = 1;
-			length = 1;
-			gain = 1.0;
-			decay = 0.0;
-			crossSeed = 0.0;
-			UpdateSeeds();
-		}
+		// buffer/output are placement-new'd into the SDRAM bump-allocator pool
+		// (custom_pool_allocate) and are never freed, so there is no destructor.
+		MultitapDiffuser(int delayBufferSize);
 
-		~MultitapDiffuser()
-		{
-			// buffer/output are placement-new'd into the SDRAM bump-allocator pool
-			// (custom_pool_allocate) and are never freed; nothing to delete here.
-		}
+		float* GetOutput() { return output; }
 
+		void SetSeed(int seed)                  { seeds.SetSeed(seed); Update(); }
+		void SetCrossSeed(float crossSeed)      { seeds.SetCrossSeed(crossSeed); Update(); }
+		void SetTapCount(int tapCount)          { count = tapCount; Update(); }
+		void SetTapLength(int tapLength)        { length = tapLength; Update(); }
+		void SetTapDecay(float tapDecay)        { decay = tapDecay; Update(); }
+		void SetTapGain(float tapGain)          { gain = tapGain; Update(); }
+		void SetBloom(bool bloomOn)             { bloom = bloomOn; Update(); }
 
-		void SetSeed(int seed)
-		{
-			this->seed = seed;
-			UpdateSeeds();
-		}
-
-		void SetCrossSeed(float crossSeed)
-		{
-			this->crossSeed = crossSeed;
-			UpdateSeeds();
-		}
-
-		float* GetOutput()
-		{
-			return output;
-		}
-
-		void SetTapCount(int tapCount)
-		{
-			count = tapCount;
-			Update();
-		}
-
-		void SetTapLength(int tapLength)
-		{
-			length = tapLength;
-			Update();
-		}
-
-		void SetTapDecay(float tapDecay)
-		{
-			decay = tapDecay;
-			Update();
-		}
-
-		void SetTapGain(float tapGain)
-		{
-			gain = tapGain;
-			Update();
-		}
-
-		void SetReverseDecay(bool reverseDecay)
-		{
-			this->isReverse = reverseDecay;
-			Update();
-		}
-
-		void Process(float* input, int sampleCount)
-		{
-			// prevents race condition when parameters are updated from Gui
-			if (isDirty)
-			{
-				tapGainsTemp = tapGains;
-				tapPositionTemp = tapPosition;
-				countTemp = count;
-				isDirty = false;
-			}
-
-			int* const tapPos = &tapPositionTemp[0];
-			float* const tapGain = &tapGainsTemp[0];
-			const int cnt = countTemp;
-
-			for (int i = 0; i < sampleCount; i++)
-			{
-				if (index < 0) index += len;
-				buffer[index] = input[i];
-				output[i] = 0.0;
-
-				for (int j = 0; j < cnt; j++)
-				{
-					auto idx = index + tapPos[j];
-					if (idx >= len) idx -= len;
-					output[i] += buffer[idx] * tapGain[j];
-				}
-
-				index--;
-			}
-		}
-
-		void ClearBuffers()
-		{
-			Utils::ZeroBuffer(buffer, len);
-			Utils::ZeroBuffer(output, len);
-		}
-
+		void Process(float* input, int sampleCount);
+		void ClearBuffers();
 
 	private:
-		void Update()
-		{
-			vector<float> newTapGains;
-			vector<int> newTapPosition;
-
-			int s = 0;
-			auto rand = [&]() {return seedValues[s++]; };
-
-			if (count < 1)
-				count = 1;
-
-			if (length < count)
-				length = count;
-
-			// used to adjust the volume of the overall output as it grows when we add more taps
-			float tapCountFactor = 1.0 / (1 + std::sqrt(count / MaxTaps));
-
-			newTapGains.resize(count);
-			newTapPosition.resize(count);
-
-			vector<float> tapData(count, 0.0);
-
-			auto sumLengths = 0.0;
-			for (size_t i = 0; i < count; i++)
-			{
-				auto val = 0.1 + rand();
-				tapData[i] = val;
-				sumLengths += val;
-			}
-
-			auto scaleLength = length / sumLengths;
-			newTapPosition[0] = 0;
-
-			for (int i = 1; i < count; i++)
-			{
-				newTapPosition[i] = newTapPosition[i - 1] + (int)(tapData[i] * scaleLength);
-			}
-
-			float lastTapPos = newTapPosition[count - 1];
-			int gainIndex = 0;
-
-			for (int i = 0; i < count; i++)
-			{
-				// when decay set to 0, there is no decay, when set to 1, the gain at the last sample is 0.01 = -40dB
-				auto g = std::pow(10, -decay * 2 * newTapPosition[i] / (float)(lastTapPos + 1));
-				auto tap = (2 * rand() - 1) * tapCountFactor;
-
-				if (isReverse) 
-					gainIndex = count - (i + 1);
-				else
-					gainIndex = i;
-				newTapGains[gainIndex] = tap * g * gain;
-			}
-			// Set the tap vs. clean mix
-			if (isReverse)
-				newTapGains[count - 1] = (1 - gain);
-			else
-				newTapGains[0] = (1 - gain);
-	
-			this->tapGains = newTapGains;
-			this->tapPosition = newTapPosition;
-			isDirty = true;
-		}
-
-		void UpdateSeeds()
-		{
-			this->seedValues = AudioLib::ShaRandom::Generate(seed, 100, crossSeed);
-			Update();
-		}
+		// Recomputes the tap positions and gains. Out of line on purpose: every
+		// setter calls it, and inlining it into each ReverbChannel::SetParameter case
+		// cost 7.5 KB of SRAM for code that runs once per knob write.
+		void Update();
 	};
 }
 

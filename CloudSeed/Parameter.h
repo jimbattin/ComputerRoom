@@ -17,7 +17,7 @@ enum class Parameter
 	TapLength,
 	TapGain,
 	TapDecay,
-	isReverse,
+	Bloom,
 
 	DiffusionEnabled,
 	DiffusionStages,

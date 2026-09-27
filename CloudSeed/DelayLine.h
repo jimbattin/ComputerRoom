@@ -34,13 +34,21 @@ namespace CloudSeed
 		bool LateStageTap;
 
 		DelayLine(int bufferSize, int samplerate)
-			: lowPass(samplerate)
-			, delay(bufferSize, samplerate * 2, 10000) // 2 second buffer, to prevent buffer overflow with modulation and randomness added (Which may increase effective delay)
+			: delay(bufferSize, samplerate * 2, 10000) // 2 second buffer, to prevent buffer overflow with modulation and randomness added (Which may increase effective delay)
 			, diffuser(samplerate, 150) // 150ms buffer
 			, lowShelf(AudioLib::Biquad::FilterType::LowShelf, samplerate)
 			, highShelf(AudioLib::Biquad::FilterType::HighShelf, samplerate)
+			, lowPass(samplerate)
 		{
 			this->bufferSize = bufferSize;
+			// A defined starting state: the lines live in the SDRAM pool, which is never
+			// zeroed, and SetParameter(LateDiffusionEnabled) compares against the old
+			// DiffuserEnabled before the preset sets it.
+			DiffuserEnabled = false;
+			LowShelfEnabled = false;
+			HighShelfEnabled = false;
+			CutoffEnabled = false;
+			LateStageTap = false;
 			tempBuffer = new float[bufferSize];
 			mixedBuffer = new float[bufferSize];
 			filterOutputBuffer = new float[bufferSize];
