@@ -24,8 +24,8 @@ MIT License.
 - Can be assigned in [presets.toml](presets.toml) and via the [editor](editor/)
 
 ## Reverse Delay 
-- Reverb engine can be fed up to 1000ms of reversed audio rather than dry signal
-- You can also blend the "dry" reverse audio back into your signal path, acting as a reverse-delay
+- Reverb engine can be fed up to 2000ms of reversed audio rather than dry signal
+- You can optionally blend the "dry" reverse audio back into your signal path, acting as a reverse-delay
 
 ## Other Stuff
 - Bloom Effecet: You can reverse the gain envelope on multitap delays to increase in volume. Toggled by an assignable switch

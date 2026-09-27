@@ -95,6 +95,9 @@ export function ParamPage({
   );
 }
 
+/** Dropdown text for targets whose bare name reads badly under its group heading. */
+const OPTION_LABELS: Record<string, string> = { 'reverse.enabled': 'Reverse' };
+
 function TargetSelect({
   value,
   options,
@@ -124,7 +127,7 @@ function TargetSelect({
           <optgroup key={g} label={g}>
             {inGroup.map((t) => (
               <option key={t} value={t}>
-                {t.slice(g.length + 1)}
+                {OPTION_LABELS[t] ?? t.slice(g.length + 1)}
               </option>
             ))}
           </optgroup>
