@@ -1,37 +1,42 @@
-# Enhanced Preset Fork
-This is a fork from https://github.com/optilude/DaisyCloudSeed a fork that improved preset usability
+# Computer Room: An Algorithmic Reverb for Terrarium
+Computer room is based on GuitarML's fork of Cloud Seed Reverb for Terrarium with several major enhancements.
+MIT License.
 
-This fork extends those capabilities and adds a few extras:
+## Presets
+- Changed by tapping the 2nd footswitch (FS2 - on the right)
+- Changes to a preset can be saved and recalled after power-cycling by holding down the bypass footswitch (FS1) and waiting for 3 rapid LED blinks 
+- Defined in [presets.toml](presets.toml)
+- Changes on the pedal by holding down both foot switches
+- Web-based Preset Editor: Connect your Seed via USB to a machine that supports Web MIDI to load and save presets to the device
+- All Knobs and Switches can be remapped (per preset) via the [editor](editor/) or [presets.toml](presets.toml)
+- Up to 16 slots available (10 are included in the example presets.toml)
 
-- Switch remap: SW1 selects delay-line count (the preset's default vs. its maximum), SW3
-  engages a classic Reverse Delay, SW4 routes that reverse (off = into the reverb's wet tail,
-  on = straight into the output mix), and SW2 keeps the "Bloom" effect, similar to a "reverse
-  reverb" (Bloom reverses the order of tap gains. Has no effect on patches with a single tap.)
-- Per-preset knob mapping: each preset's `[preset.knob_map]` in
-  [presets.toml](presets.toml) assigns all six knobs a primary function and a **secondary**
-  function reached by holding the **preset footswitch (FS 2)** down
-- Per-preset toggle mapping: each preset's `[preset.toggle_map]` assigns all four toggle
-  switches a primary and a secondary (FS 2 held) on/off target; the defaults are the SW1-SW4
-  functions above
-- More program storage (Moved the application to SRAM)
-- Wider range of preset support offered by placing a limit on the number of delay lines for each preset
-- *Through the Looking Glass* is available as preset 9 (Delay lines capped at 4 for this one only)
-- *Dark Plate*: Preset #10 mostly adapted from from Ghost Note Audio's CloudSeedCore
-- Delay line count is toggled by SW1 between each preset's `default_delay_lines` and
-  `max_delay_lines` (both set in presets.toml; 2 and up to 5 as shipped)
-- Bypass state is saved between power cycles
-- Per-preset user save: hold FS 1 for 5 s to store the current sound into the current preset;
-  hold FS 1 + FS 2 together for 5 s to restore that preset to its factory values. Saved
-  presets survive power cycles and are discarded when different firmware is flashed or a
-  different preset bank is uploaded
-- Agent-guided performance optimizations
-- Reduced 1khz whine while active or bypassed 
-- Presets are defined in [presets.toml](presets.toml), not in C++. The file is compiled into
-  the firmware image and parsed at boot; edit values there and reflash
-- Preset upload over USB: the Seed's USB port is a USB-MIDI device, so a web page can
-  upload a new presets.toml, read the active one back, or revert to the built-in bank without
-  reflashing ([docs/USB_MIDI.md](docs/USB_MIDI.md)); the [editor/](editor/) web app does this and
-  edits every preset field (see "Preset editor (browser)")
+## Browser-Based Preset Editor (via Web MIDI)
+- Just plug into your Seed's USB port and pull up the editor on your browser
+- Don't want to flash a new presets.toml? No worries, there's an editor for that!
+- Supports Chrome and Firefox
+- Can load presets directly from your device
+- Diagram showcasing signal flow of the reverb
+
+## Secondary Controls
+- Accessed by holding down the 2nd footswitch (FS2 - on the right)
+- Secondary function can be assigned to all 6 knobs and 4 switches
+- Can be assigned in [presets.toml](presets.toml) and via the [editor](editor/)
+
+## Reverse Delay 
+- Reverb engine can be fed up to 1000ms of reversed audio rather than dry signal
+- You can also blend the "dry" reverse audio back into your signal path, acting as a reverse-delay
+
+## Other Stuff
+- Bloom Effecet: You can reverse the gain envelope on multitap delays to increase in volume. Toggled by an assignable switch
+- Delay Lines: Each preset has a default (2) and maximum (4 or 5) number of delay lines, toggled by an assignable switch
+- Some "1khz whine" reduction (We keep the core busy) 
+- General performance improvements to give presets more headroom before crackles show up
+
+# Special Thanks
+[Ghost Note Audio](https://ghostnoteaudio.uk) for their work on [CloudSeed](https://github.com/ValdemarOrn/CloudSeed)
+[GuitarML's port of CloudSeed Reverb](https://github.com/GuitarML/DaisyCloudSeed) to the [PedalPCB Terrarium](https://www.pedalpcb.com/product/pcb351/)
+[PedalPCB](https://www.pedalpcb.com) and community :) 
 
 # DaisyCloudSeed (GuitarML fork for Terrarium)
 Cloud Seed is an open source algorithmic reverb plugin under the MIT license, which can be found at [ValdemarOrn/CloudSeed](https://github.com/ValdemarOrn/CloudSeed).
@@ -279,11 +284,11 @@ Every preset also carries a `[preset.toggle_map]` table naming what each toggle 
 ```toml
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"      # primary: SW 1 normally
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"      # secondary: SW 1 flipped while FS 2 is held
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 ```
@@ -293,7 +298,7 @@ All eight keys are required. Accepted targets (lever up = on):
 | Target | Notes |
 | --- | --- |
 | `delay_lines.max` | Off = the preset's `default_delay_lines`, on = its `max_delay_lines` (default SW 1) |
-| `early.isReverse` | Bloom (default SW 2) |
+| `early.Bloom` | Bloom (default SW 2) |
 | `reverse.enabled` | Reverse voice on (default SW 3) |
 | `reverse.direct_mix` | Off = reverse feeds the reverb tail, on = reversed reverb mixed into the output (default SW 4) |
 | `input.HiPassEnabled`, `input.LowPassEnabled` | Input high-pass / low-pass on/off. While a toggle targets one, knobs on `HighPass` / `LowPass` no longer switch that filter on |
@@ -318,6 +323,8 @@ cancels the preset change on the FS 2 release.
 
 # Control
 
+Listed below is the default control scheme for the pedal presets.
+
 | Control | Description | Comment |
 | --- | --- | --- |
 | Ctrl 1 | Dry Level | Adjusts the Dry level out |
@@ -333,7 +340,7 @@ cancels the preset change on the FS 2 release.
 | Ctrl 5 + FS 2 held | Line modulation rate | Delay-line modulation rate, 0-5 Hz |
 | Ctrl 6 + FS 2 held | Reverse window | Reverse-delay window length, 20-2000 ms |
 | SW 1 | Delay Lines (default target `delay_lines.max`) | Off = the preset's `default_delay_lines` (2 in every shipped preset); On = its `max_delay_lines` (5, or 4 for "Through the Looking Glass"). |
-| SW 2 | Bloom (default target `early.isReverse`) | Reverses the order of multi-tap delay gains, resulting in subsequent taps getting louder rather than quietier. |
+| SW 2 | Bloom (default target `early.Bloom`) | Reverses the order of multi-tap delay gains, resulting in subsequent taps getting louder rather than quietier. |
 | SW 3 | Reverse Delay (default target `reverse.enabled`) | Off = dry + reverb only; On = enables the reverse voice, routed per `reverse.direct_mix` (SW 4 by default: into the reverb tail, or mixed straight into the output). Its window length is the knob mapped to `reverse.delay` (Ctrl 6 secondary by default). |
 | SW 4 | Reverse Routing (default target `reverse.direct_mix`) | Chooses where the reverse goes. Off = into the reverb (the reversed guitar feeds the wet tail; the forward dry pass-through stays clean via dry-gain cancellation). On = direct mix (a reversed copy of the reverb output is mixed straight into the output). Only audible when the reverse voice is on. |
 | FS 1 | Bypass/Active | Bypass / effect engaged. Acts on **release**. A release after a 5 s hold, or while FS 2 is (or was, during the same press) held, does not toggle bypass. |

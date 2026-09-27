@@ -208,7 +208,7 @@ export function FlowPanel({ preset, page, focusKey, pinned, onBlock }: FlowPanel
       .join(' ');
     const r = rectOf(id);
     const cx = r ? r.x + r.w / 2 : 0;
-    const short = id === 'taps' && preset.params['early.isReverse'] >= 0.5 ? 'BLOOM' : info.short;
+    const short = id === 'taps' && preset.params['early.Bloom'] >= 0.5 ? 'BLOOM' : info.short;
 
     let shape;
     let texts;

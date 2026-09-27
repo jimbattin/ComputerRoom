@@ -147,7 +147,7 @@ KNOB_6: late.LineDecay                       | reverse.delay    (20-2000 ms reve
 // Toggle read: src/cloudseed.cpp:471-473; scan + dispatch: src/cloudseed.cpp:370-374;
 // applyToggleTarget(): src/cloudseed.cpp:266-281. Primary (_a) = secondary (_b) in every shipped preset.
 SWITCH_1: "delay_lines.max"    off = the preset's default_delay_lines, on = its max_delay_lines
-SWITCH_2: "early.isReverse"    Bloom: reverses the early tap gain order
+SWITCH_2: "early.Bloom"        Bloom: reverses the early tap gain order
 SWITCH_3: "reverse.enabled"    reverse voice on/off (window length set by whichever knob maps to
           "reverse.delay"; see CloudSeed/ReverseDelay.h)
 SWITCH_4: "reverse.direct_mix" off = reverse feeds the reverb wet path, on = direct output mix
@@ -305,7 +305,7 @@ All presets allow 5 delay lines except "Through the Looking Glass"
 - Each `[[preset]]` carries `name`, `blinks`, `led_on_ms`, `led_off_ms`, `led_pause_ms`,
   `default_delay_lines`, `max_delay_lines`, a `[preset.knob_map]` table, a `[preset.toggle_map]`
   table, eight `[preset.params.*]` groups holding all 46 file-controlled parameters (see the
-  parameter reference in the TOML header - `isReverse` (Bloom) is now a file parameter, in
+  parameter reference in the TOML header - `Bloom` is now a file parameter, in
   `[preset.params.early]`), a ninth group `[preset.params.reverse]` (`delay`, `enabled`,
   `direct_mix`), and a tenth `[preset.params.delay_lines]` (`max`). None of the last two groups
   has a `Parameter` slot, so `parseParams()` parses them separately from `kGroups`
@@ -316,7 +316,7 @@ All presets allow 5 delay lines except "Through the Looking Glass"
   ([src/preset_bank.cpp](src/preset_bank.cpp)) into `PresetData::knobMap[bank][knob]`
 - `[preset.toggle_map]` requires all eight `toggleN_a` / `toggleN_b` keys (N = 1..4 =
   SWITCH_1..SWITCH_4). Each value is a quoted `"group.Parameter"` naming an on/off parameter
-  (`kToggleParams`: `isReverse`, the seven filter/diffusion/shelf/cutoff enables, the two
+  (`kToggleParams`: `Bloom`, the seven filter/diffusion/shelf/cutoff enables, the two
   diffusion stage counts, `LateStageTap`, `Interpolation`) or one of the three pseudo-targets
   `"delay_lines.max"`, `"reverse.enabled"`, `"reverse.direct_mix"`. Parsed by
   `parseToggleMap()`/`parseToggleTarget()` ([src/preset_bank.cpp](src/preset_bank.cpp)) into
@@ -362,7 +362,7 @@ QSPI - is parsed from a dedicated 512 KB `DSY_SDRAM_BSS` arena that is not part 
 upload before anything is written to flash (see "USB-MIDI preset upload" below). Every parse
 starts the arena at offset 0 and resets it on return, so boot and an upload validation never
 overlap, and the reverb's `custom_pool` is unaffected either way. Peak measured usage at boot is
-143,168 B on x86-64 (smaller on 32-bit ARM). Permanent SDRAM cost of the TOML parse arena:
+142,840 B on x86-64 (smaller on 32-bit ARM). Permanent SDRAM cost of the TOML parse arena:
 512 KB, whether or not a USB upload ever happens.
 
 ### Preset Persistence
@@ -458,7 +458,7 @@ just a reflash.
   `valid` is the last field, and QSPI pages are programmed in ascending order, so a write cut
   off by power loss can leave a slot invalid (factory) but never half-written
 - `params` is the full `GetAllParameters()` snapshot. `LineCount` comes along but is ignored,
-  because `LoadPreset()` skips it. `isReverse` is preset data now and is saved for real. The
+  because `LoadPreset()` skips it. `Bloom` is preset data now and is saved for real. The
   knob map, toggle map, `default_delay_lines`/`max_delay_lines`, and blink timing are not saved
 
 **Firmware + bank identity** (`firmwareImageHash()`, `src/pedal_storage.cpp:24-31`): FNV-1a over
@@ -601,7 +601,7 @@ with the firmware:
 
 **Input Stage**: InputMix, PreDelay, HighPass, LowPass
 
-**Early Reverb**: TapCount, TapLength, TapGain, TapDecay, isReverse, DiffusionEnabled, DiffusionStages, DiffusionDelay, DiffusionFeedback
+**Early Reverb**: TapCount, TapLength, TapGain, TapDecay, Bloom, DiffusionEnabled, DiffusionStages, DiffusionDelay, DiffusionFeedback
 
 **Late Reverb**: LineCount, LineDelay, LineDecay, LateDiffusionEnabled, LateDiffusionStages, LateDiffusionDelay, LateDiffusionFeedback
 
@@ -661,7 +661,7 @@ embedded presets.toml.
 - Main reverb controller
 - Preset application: `LoadPreset(const float* values)` (`:47-60`) copies a parsed
   `PresetData::params[]` into `parameters[]`, skipping only `LineCount` (written at audio rate
-  from the `"delay_lines.max"` toggle target; `isReverse`/Bloom is preset data like everything
+  from the `"delay_lines.max"` toggle target; `Bloom` is preset data like everything
   else), then re-applies all 47 slots through `SetParameter`. The
   constructor no longer loads any preset - `main()` parses presets.toml and calls `LoadPreset()`
   before audio starts
@@ -672,7 +672,7 @@ embedded presets.toml.
 - Public API: `LoadPreset(const float*)` `:47`, `SetParameter(Parameter, float)` `:167`,
   `ClearBuffers()` `:178`, `Process(float* input, float* output, int bufferSize)` `:184`
 - Parameter scaling (the normalized 0.0-1.0 → real-unit mapping documented in presets.toml):
-  `GetScaledParameter` `:85`. `isReverse` follows the same `< 0.5 ? 0 : 1` rule as every other
+  `GetScaledParameter` `:85`. `Bloom` follows the same `< 0.5 ? 0 : 1` rule as every other
   on/off parameter (`:101`)
 
 **ReverbChannel** ([CloudSeed/ReverbChannel.h](CloudSeed/ReverbChannel.h)):
@@ -772,7 +772,7 @@ scalars (a parameter value that is non-finite or outside 0..1; `max_delay_lines`
 (unknown group/parameter, wrong group, a runtime parameter, or - for toggles - a parameter not
 in `kToggleParams`), and a document too large for the boot parse arena - the host tool allocates
 through a replica of `TOML_ARENA_SIZE` (512 KB, 8-byte aligned, no reuse), so `presets.toml: 10
-presets valid, boot arena peak 143168 of 524288 bytes` is the same peak the pedal sees. Host
+presets valid, boot arena peak 142840 of 524288 bytes` is the same peak the pedal sees. Host
 pointers are 64-bit, so the reported peak over-estimates the 32-bit target: a pass here implies
 a fit on hardware. A near-miss should be fixed by raising `TOML_ARENA_SIZE` (`src/sdram_pool.cpp:49`),
 not by loosening the host check.
@@ -930,7 +930,7 @@ toggle2_b = "late_eq.CutoffEnabled"
 
 Verify with `./build/preset_check --print-toggle-map presets.toml`. A toggle value is either one
 of the three pseudo-targets or a quoted `"group.Parameter"` naming one of the twelve on/off
-parameters in `kToggleParams` ([src/preset_bank.cpp](src/preset_bank.cpp)): `early.isReverse`,
+parameters in `kToggleParams` ([src/preset_bank.cpp](src/preset_bank.cpp)): `early.Bloom`,
 `input.HiPassEnabled`, `input.LowPassEnabled`, `early_diffusion.DiffusionEnabled`,
 `early_diffusion.DiffusionStages`, `late_diffusion.LateDiffusionEnabled`,
 `late_diffusion.LateDiffusionStages`, `late_eq.LowShelfEnabled`, `late_eq.HighShelfEnabled`,
@@ -1005,11 +1005,11 @@ knob6_b = "reverse.delay"
 # All eight keys required.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -1025,7 +1025,7 @@ LowPass        = 0.29
 # Early reflections: the multi-tap delay that follows the input stage.
 [preset.params.early]
 # ...
-isReverse = 0.0
+Bloom     = 0.0
 
 # ... the remaining five [preset.params.*] groups, every key required
 
@@ -1135,7 +1135,7 @@ SWITCH_3/SWITCH_4 (`reverse.enabled`/`reverse.direct_mix`) in the callback)
 Every switch's function is data, resolved per preset by `[preset.toggle_map]`. The default map
 reproduces the historical assignment: SWITCH_1 selects the delay-line count
 (`state.delayLinesMax ? state.maxDelayLines : state.defaultDelayLines`); SWITCH_2 is Bloom
-(`Parameter::isReverse`); SWITCH_3 toggles the reverse voice (`state.reverseEnabled`); SWITCH_4
+(`Parameter::Bloom`); SWITCH_3 toggles the reverse voice (`state.reverseEnabled`); SWITCH_4
 selects reverse routing (`state.reverseDirectMix`; off = into the reverb, on = direct mix). The
 reverse window length is not a toggle target: it starts at the preset's
 `[preset.params.reverse] delay` and is then set by whichever knob maps to `"reverse.delay"`.
@@ -1508,8 +1508,8 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
 - The runtime heap is not in this report: it grows from `end` in RAM_D2
   (`libdaisy/core/STM32H750IB_sram.lds:239-250`), which is where `DelayLine`'s `tempBuffer`,
   `mixedBuffer`, and `filterOutputBuffer` (`CloudSeed/DelayLine.h:52-54`) land
-- SRAM (`.text`+`.data`, `BOOT_SRAM` region): 233,208 B of 480KB (47.45%). Of that, the
-  embedded `presets.toml` blob is 49,116 B (`build/presets_toml.o` - it carries the
+- SRAM (`.text`+`.data`, `BOOT_SRAM` region): 233,112 B of 480KB (47.43%). Of that, the
+  embedded `presets.toml` blob is 49,028 B (`build/presets_toml.o` - it carries the
   per-preset `[preset.knob_map]`, `[preset.toggle_map]`, `[preset.params.reverse]` and
   `[preset.params.delay_lines]` tables), tomlc99 is 14,371 B, and `preset_bank.o` is 8,285 B
 - DTCMRAM: 45,420 B of 128KB (34.65%) — up from 30,284 B; most of the added 15,136 B is libdaisy's
@@ -1616,7 +1616,7 @@ Key changes in this fork:
     callback passes audio through and makes no engine write, so a load cannot be read
     half-applied
 20. **Per-preset user save / factory restore**: FOOTSWITCH_1 held 5 s stores the engine state
-    (isReverse and the three toggle pseudo-values included; `delay_lines.max` is stored as its
+    (Bloom and the three toggle pseudo-values included; `delay_lines.max` is stored as its
     on/off state, the line counts always come from presets.toml) and the reverse window into the
     current preset's slot of a QSPI
     `UserPresets` store (offset 0x1000); FOOTSWITCH_1 + FOOTSWITCH_2 held 5 s clears the slot
@@ -1691,7 +1691,7 @@ cd editor && npm install && npm run dev   # Browser preset editor (http://localh
 - Buffer size: 48 samples
 - Sample rate: 48kHz (typical)
 - SDRAM pool: 48MB for the reverb (`custom_pool`), plus a separate 512 KB TOML parse arena used
-  at boot and to validate USB uploads (peak measured 143,168 B)
+  at boot and to validate USB uploads (peak measured 142,840 B)
 - Delay lines: 5 (mono Terrarium), toggled per preset between `default_delay_lines` and
   `max_delay_lines` in presets.toml (default SWITCH_1, `[preset.toggle_map]`)
 - Presets: 10, defined in presets.toml, `gPresets.count` at runtime (max `kMaxPresets` = 16)

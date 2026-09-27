@@ -160,7 +160,7 @@ allocated on the heap when written. `ShaRandom::Generate()` built its result fro
 regenerated the delay-line seed series (4 SHA-256 digests) on every `LineDelay`, `LineDecay`,
 `LineModAmount`, `LineModRate` and `LateDiffusionMod*` write, although the series depends only
 on `DelaySeed` and `CrossSeed`. `MultitapDiffuser::Update()` built three temporary vectors for
-every `TapCount`, `TapLength`, `TapGain`, `TapDecay` and `isReverse` write, and `Process()`
+every `TapCount`, `TapLength`, `TapGain`, `TapDecay` and `Bloom` write, and `Process()`
 copy-assigned them. Measured on the host with counting allocators, over six writes each:
 `LineDecay` made 210 heap allocations, `TapDecay` 18, and `CrossSeed` 2508 (it re-hashed every
 stage's series, and each `DelayLine` diffuser hashed twice via `SetSeed` then `SetCrossSeed`).
@@ -182,7 +182,7 @@ stage's series, and each `DelayLine` diffuser hashed twice via `SetSeed` then `S
 through `SetParameter()` and `Process()` after boot and requires zero heap and zero pool
 allocations; it failed for 17 parameters before this change. The output is unchanged:
 rendering all ten presets while sweeping the seeds, `CrossSeed`, `LineDecay`, `TapDecay`,
-`TapCount`, `LineModAmount` and `isReverse` is byte-identical to the old engine at host
+`TapCount`, `LineModAmount` and `Bloom` is byte-identical to the old engine at host
 `-O2`, and at `-O3 -ffast-math -mfma -fno-tree-vectorize`. With the host auto-vectorizer on, the
 two differ only by float reassociation, at most 92 dB below peak; the Cortex-M7's
 scalar-only FPU gives GCC nothing to vectorize with. Code size: with `MultitapDiffuser` all in

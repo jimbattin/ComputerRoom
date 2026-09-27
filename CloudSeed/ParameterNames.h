@@ -6,7 +6,7 @@
 // Indexed by (int)Parameter; order must match Parameter.h exactly.
 static const char* const kParameterNames[(int)Parameter::Count] = {
     "InputMix", "PreDelay", "HighPass", "LowPass",
-    "TapCount", "TapLength", "TapGain", "TapDecay", "isReverse",
+    "TapCount", "TapLength", "TapGain", "TapDecay", "Bloom",
     "DiffusionEnabled", "DiffusionStages", "DiffusionDelay", "DiffusionFeedback",
     "LineCount", "LineDelay", "LineDecay",
     "LateDiffusionEnabled", "LateDiffusionStages", "LateDiffusionDelay", "LateDiffusionFeedback",

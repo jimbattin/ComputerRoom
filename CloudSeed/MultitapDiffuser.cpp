@@ -18,7 +18,7 @@ namespace CloudSeed
 		length = 1;
 		gain = 1.0;
 		decay = 0.0;
-		isReverse = false;
+		bloom = false;
 		seeds.SetSeed(0);
 		Update();
 	}
@@ -106,14 +106,14 @@ namespace CloudSeed
 			auto g = std::pow(10, -decay * 2 * tapPosition[i] / (float)(lastTapPos + 1));
 			auto tap = (2 * rand() - 1) * tapCountFactor;
 
-			if (isReverse) 
+			if (bloom) 
 				gainIndex = count - (i + 1);
 			else
 				gainIndex = i;
 			tapGains[gainIndex] = tap * g * gain;
 		}
 		// Set the tap vs. clean mix
-		if (isReverse)
+		if (bloom)
 			tapGains[count - 1] = (1 - gain);
 		else
 			tapGains[0] = (1 - gain);

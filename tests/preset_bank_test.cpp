@@ -67,18 +67,18 @@ struct Reject {
 static const char kToggleMapBlock[] =
     "[preset.toggle_map]\n"
     "toggle1_a = \"delay_lines.max\"\n"
-    "toggle2_a = \"early.isReverse\"\n"
+    "toggle2_a = \"early.Bloom\"\n"
     "toggle3_a = \"reverse.enabled\"\n"
     "toggle4_a = \"reverse.direct_mix\"\n"
     "toggle1_b = \"delay_lines.max\"\n"
-    "toggle2_b = \"early.isReverse\"\n"
+    "toggle2_b = \"early.Bloom\"\n"
     "toggle3_b = \"reverse.enabled\"\n"
     "toggle4_b = \"reverse.direct_mix\"\n";
 
 static const Reject kRejects[] = {
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"output.DryOut\"", 1,
      "toggle_map: toggle1_a: 'DryOut' is not an on/off parameter"},
-    {"toggle2_b = \"early.isReverse\"", "toggle2_b = \"reverse.delay\"", 1,
+    {"toggle2_b = \"early.Bloom\"", "toggle2_b = \"reverse.delay\"", 1,
      "'reverse' toggles only 'enabled' or 'direct_mix'"},
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"late.LineCount\"", 1,
      "runtime-controlled"},
@@ -91,7 +91,7 @@ static const Reject kRejects[] = {
     {"toggle4_b = \"reverse.direct_mix\"\n", "", 1,
      "toggle_map: missing or non-string 'toggle4_b'"},
     {"toggle4_b = \"reverse.direct_mix\"\n",
-     "toggle4_b = \"reverse.direct_mix\"\ntoggle5_a = \"early.isReverse\"\n", 1,
+     "toggle4_b = \"reverse.direct_mix\"\ntoggle5_a = \"early.Bloom\"\n", 1,
      "[preset.toggle_map]: unknown key 'toggle5_a'"},
     {kToggleMapBlock, "", 1, "missing [preset.toggle_map]"},
     {"max = 0.0", "max = 2.0", 1, "'delay_lines.max' = 2 out of range 0..1"},
@@ -106,7 +106,7 @@ static const Reject kRejects[] = {
     {"max_delay_lines = 5.0", "max_delay_lines = 5.5", 1,
      "preset 0: max_delay_lines must be a whole number 1..5"},
     {"enabled    = 0.0", "enabled    = nan", 1, "'reverse.enabled' = nan out of range 0..1"},
-    {"isReverse = 0.0\n", "", 1, "missing parameter 'isReverse'"},
+    {"Bloom     = 0.0\n", "", 1, "missing parameter 'Bloom'"},
     {"knob1_a = \"output.DryOut\"", "knob1_a = \"reverse.enabled\"", 1,
      "'reverse' has only 'delay'"},
     {"led_on_ms = 150", "led_on_ms = 150.5", 1,
@@ -129,7 +129,7 @@ struct Accept {
 
 static const Accept kAccepts[] = {
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"early_diffusion.DiffusionStages\""},
-    {"toggle2_a = \"early.isReverse\"", "toggle2_a = \"late.Interpolation\""},
+    {"toggle2_a = \"early.Bloom\"", "toggle2_a = \"late.Interpolation\""},
 };
 
 int main(int argc, char** argv) {

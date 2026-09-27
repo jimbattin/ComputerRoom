@@ -31,7 +31,7 @@ const int kInputParams[] = {
 
 const int kEarlyParams[] = {
     PARAM(TapCount), PARAM(TapLength), PARAM(TapGain), PARAM(TapDecay),
-    PARAM(isReverse)};
+    PARAM(Bloom)};
 
 const int kEarlyDiffusionParams[] = {
     PARAM(DiffusionEnabled), PARAM(DiffusionStages), PARAM(DiffusionDelay),
@@ -85,7 +85,7 @@ constexpr int kGroupCount = countOf(kGroups);
 // DiffusionStages / LateDiffusionStages give 1 vs 2 allpass stages, since
 // AllpassDiffuser::MaxStageCount == 2). Continuous parameters are rejected.
 const int kToggleParams[] = {
-    PARAM(isReverse), PARAM(HiPassEnabled), PARAM(LowPassEnabled),
+    PARAM(Bloom), PARAM(HiPassEnabled), PARAM(LowPassEnabled),
     PARAM(DiffusionEnabled), PARAM(DiffusionStages), PARAM(LateDiffusionEnabled),
     PARAM(LateDiffusionStages), PARAM(LowShelfEnabled), PARAM(HighShelfEnabled),
     PARAM(CutoffEnabled), PARAM(LateStageTap), PARAM(Interpolation)};

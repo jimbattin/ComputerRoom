@@ -63,7 +63,7 @@
 #     TapLength  time spread of the taps, 0-500 ms
 #     TapGain    gain of the tap bank, 2-decade curve
 #     TapDecay   how fast tap gain falls across the bank, 0-1
-#     isReverse  Bloom: on when >= 0.5, reverses the early tap gain order (default SWITCH_2 target)
+#     Bloom      on when >= 0.5, reverses the early tap gain order (default SWITCH_2 target)
 #
 #   [preset.params.early_diffusion]  Early diffusion: allpass chain that smears the early reflections.
 #     DiffusionEnabled         on when >= 0.5: runs the early allpass diffuser
@@ -130,7 +130,7 @@
 #
 # TOGGLE TARGETS (values accepted in [preset.toggle_map]):
 #   delay_lines.max                       delay line count (default SWITCH_1)
-#   early.isReverse                       Bloom (default SWITCH_2)
+#   early.Bloom                       Bloom (default SWITCH_2)
 #   reverse.enabled                       reverse voice on (default SWITCH_3)
 #   reverse.direct_mix                    off = reverse feeds the reverb tail, on = reversed reverb
 #                                         mixed into the output (default SWITCH_4)
@@ -179,11 +179,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -202,7 +202,7 @@ TapCount  = 0.36499997973442078
 TapLength = 1.0
 TapGain   = 1.0
 TapDecay  = 0.86500012874603271
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -299,11 +299,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -322,7 +322,7 @@ TapCount  = 0.36499997973442078
 TapLength = 1.0
 TapGain   = 0.83499991893768311
 TapDecay  = 0.86500012874603271
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -419,11 +419,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -442,7 +442,7 @@ TapCount  = 0.41499990224838257
 TapLength = 0.43999996781349182
 TapGain   = 1.0
 TapDecay  = 1.0
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -539,11 +539,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -562,7 +562,7 @@ TapCount  = 0.51999980211257935
 TapLength = 0.26499992609024048
 TapGain   = 0.69499999284744263
 TapDecay  = 1.0
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -659,11 +659,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -682,7 +682,7 @@ TapCount  = 1.0
 TapLength = 1.0
 TapGain   = 0.0
 TapDecay  = 0.830000102519989
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -779,11 +779,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -802,7 +802,7 @@ TapCount  = 0.51999980211257935
 TapLength = 1.0
 TapGain   = 0.90000003576278687
 TapDecay  = 1.0
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -899,11 +899,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -922,7 +922,7 @@ TapCount  = 0.41499990224838257
 TapLength = 0.43999996781349182
 TapGain   = 0.87999999523162842
 TapDecay  = 1.0
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -1019,11 +1019,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -1042,7 +1042,7 @@ TapCount  = 0
 TapLength = 1
 TapGain   = 0
 TapDecay  = 0.8650001287460327
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -1139,11 +1139,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -1162,7 +1162,7 @@ TapCount  = 1.0
 TapLength = 1.0
 TapGain   = 1.0
 TapDecay  = 0.71000003814697266
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -1259,11 +1259,11 @@ knob6_b = "reverse.delay"
 # is written by flipping the switch while the preset footswitch (FS2) is held down.
 [preset.toggle_map]
 toggle1_a = "delay_lines.max"
-toggle2_a = "early.isReverse"
+toggle2_a = "early.Bloom"
 toggle3_a = "reverse.enabled"
 toggle4_a = "reverse.direct_mix"
 toggle1_b = "delay_lines.max"
-toggle2_b = "early.isReverse"
+toggle2_b = "early.Bloom"
 toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 
@@ -1282,7 +1282,7 @@ TapCount  = 0.1959999948740005
 TapLength = 0.9866999983787537
 TapGain   = 1.0
 TapDecay  = 1.0
-isReverse = 0.0
+Bloom     = 0.0
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]

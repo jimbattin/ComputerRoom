@@ -27,7 +27,7 @@ namespace CloudSeed
 		float decay;
 
 		bool isDirty;
-		bool isReverse;
+		bool bloom;
 		float tapGainsTemp[MaxTaps];
 		int tapPositionTemp[MaxTaps];
 		int countTemp;
@@ -45,7 +45,7 @@ namespace CloudSeed
 		void SetTapLength(int tapLength)        { length = tapLength; Update(); }
 		void SetTapDecay(float tapDecay)        { decay = tapDecay; Update(); }
 		void SetTapGain(float tapGain)          { gain = tapGain; Update(); }
-		void SetReverseDecay(bool reverseDecay) { isReverse = reverseDecay; Update(); }
+		void SetBloom(bool bloomOn)             { bloom = bloomOn; Update(); }
 
 		void Process(float* input, int sampleCount);
 		void ClearBuffers();

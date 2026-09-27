@@ -4,7 +4,7 @@
 /** The 8 Parameter groups in kGroups order, keys in presets.toml order. */
 export const GROUPS: Record<string, readonly string[]> = {
   input: ['InputMix', 'PreDelay', 'HiPassEnabled', 'HighPass', 'LowPassEnabled', 'LowPass'],
-  early: ['TapCount', 'TapLength', 'TapGain', 'TapDecay', 'isReverse'],
+  early: ['TapCount', 'TapLength', 'TapGain', 'TapDecay', 'Bloom'],
   early_diffusion: [
     'DiffusionEnabled',
     'DiffusionStages',
@@ -45,7 +45,7 @@ export const PSEUDO_GROUPS: Record<string, readonly string[]> = {
 /** Every Parameter name in Parameter.h order (kParameterNames), LineCount included. */
 export const PARAMETER_ORDER = [
   'InputMix', 'PreDelay', 'HighPass', 'LowPass',
-  'TapCount', 'TapLength', 'TapGain', 'TapDecay', 'isReverse',
+  'TapCount', 'TapLength', 'TapGain', 'TapDecay', 'Bloom',
   'DiffusionEnabled', 'DiffusionStages', 'DiffusionDelay', 'DiffusionFeedback',
   'LineCount', 'LineDelay', 'LineDecay',
   'LateDiffusionEnabled', 'LateDiffusionStages', 'LateDiffusionDelay', 'LateDiffusionFeedback',
@@ -63,7 +63,7 @@ export const RUNTIME_PARAMETER = 'LineCount';
 
 /** On/off parameters a toggle may target (kToggleParams). */
 export const TOGGLE_PARAMS = [
-  'isReverse', 'HiPassEnabled', 'LowPassEnabled', 'DiffusionEnabled', 'DiffusionStages',
+  'Bloom', 'HiPassEnabled', 'LowPassEnabled', 'DiffusionEnabled', 'DiffusionStages',
   'LateDiffusionEnabled', 'LateDiffusionStages', 'LowShelfEnabled', 'HighShelfEnabled',
   'CutoffEnabled', 'LateStageTap', 'Interpolation',
 ];
@@ -93,7 +93,7 @@ const DEFS: Record<string, [string, string]> = {
   'early.TapLength': ['TAPLEN', 'time spread of the taps, 0-500 ms'],
   'early.TapGain': ['TAPGN', 'gain of the tap bank, 2-decade curve'],
   'early.TapDecay': ['TAPDCY', 'how fast tap gain falls across the bank, 0-1'],
-  'early.isReverse': ['BLOOM', 'Bloom: on when >= 0.5, reverses the early tap gain order'],
+  'early.Bloom': ['BLOOM', 'on when >= 0.5, reverses the early tap gain order'],
   'early_diffusion.DiffusionEnabled': ['DIFF', 'on when >= 0.5: runs the early allpass diffuser'],
   'early_diffusion.DiffusionStages': ['STAGES', 'allpass stages in series, 1-2'],
   'early_diffusion.DiffusionDelay': ['DIFDLY', 'delay per allpass stage, 10-100 ms'],
@@ -136,7 +136,7 @@ const DEFS: Record<string, [string, string]> = {
 };
 
 const SWITCHES: Record<string, true> = {
-  'input.HiPassEnabled': true, 'input.LowPassEnabled': true, 'early.isReverse': true,
+  'input.HiPassEnabled': true, 'input.LowPassEnabled': true, 'early.Bloom': true,
   'early_diffusion.DiffusionEnabled': true, 'late.LateStageTap': true, 'late.Interpolation': true,
   'late_diffusion.LateDiffusionEnabled': true, 'late_eq.LowShelfEnabled': true, 'late_eq.HighShelfEnabled': true,
   'late_eq.CutoffEnabled': true, 'reverse.enabled': true, 'reverse.direct_mix': true, 'delay_lines.max': true,
@@ -177,7 +177,7 @@ export const KNOB_TARGETS: string[] = [
 /** Valid [preset.toggle_map] values: the three pseudo targets, then kToggleParams. */
 export const TOGGLE_TARGETS: string[] = [
   'delay_lines.max',
-  'early.isReverse',
+  'early.Bloom',
   'reverse.enabled',
   'reverse.direct_mix',
   'input.HiPassEnabled',
