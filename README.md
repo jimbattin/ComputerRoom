@@ -1,4 +1,4 @@
-# Computer Room: An Algorithmic Reverb for Terrarium
+# Computer Room: Algorithmic Reverb for Terrarium
 Computer room is based on GuitarML's fork of Cloud Seed Reverb for Terrarium with several major enhancements.
 MIT License.
 
