@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { formatValue } from './scale';
 
 const lines = { defaultDelayLines: 2, maxDelayLines: 5 };

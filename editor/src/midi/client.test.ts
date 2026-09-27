@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { PresetLink, RebootTimeoutError, type MidiTransport } from './client';
 import { CMD, HEADER, fnv1a32, getU14, getU21, getU32, u14, u21, u32 } from './protocol';
+import fixture from '../../../tests/fixtures/two_presets.toml' with { type: 'text' };
+import builtIn from '../../../presets.toml' with { type: 'text' };
 
-const fixture = readFileSync(new URL('../../../tests/fixtures/two_presets.toml', import.meta.url), 'utf8');
-const builtIn = readFileSync(new URL('../../../presets.toml', import.meta.url), 'utf8');
 const enc = (s: string) => new TextEncoder().encode(s);
 
 const CHUNK = 240;

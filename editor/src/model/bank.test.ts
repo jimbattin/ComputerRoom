@@ -1,9 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { deletePreset, docText, duplicatePreset, fmtG, loadBank, scanDoc, setField, type BankDoc } from './bank';
-
-const fixture = readFileSync(new URL('../../../tests/fixtures/two_presets.toml', import.meta.url), 'utf8');
-const presetsToml = readFileSync(new URL('../../../presets.toml', import.meta.url), 'utf8');
+import fixture from '../../../tests/fixtures/two_presets.toml' with { type: 'text' };
+import presetsToml from '../../../presets.toml' with { type: 'text' };
 
 /** tests/preset_bank_test.cpp Mutate(): replace the nth `from`, searching from the first [[preset]]. */
 function mutate(t: string, from: string, to: string, nth = 1): string {

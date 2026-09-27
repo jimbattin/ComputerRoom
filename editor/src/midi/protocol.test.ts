@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { createSysexAssembler, decodeInfo, fnv1a32, getU32, parseReply, u21, u32 } from './protocol';
 
 const enc = (s: string) => new TextEncoder().encode(s);

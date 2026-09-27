@@ -1,0 +1,11 @@
+[run]
+# Run package.json scripts and node_modules/.bin tools (tsc) on Bun, even with a `node` shebang.
+bun = true
+
+[serve.static]
+plugins = ["./toml-text-plugin.ts"]
+
+[test]
+root = "src"
+# The component tests need a DOM; happy-dom must be registered before @testing-library loads.
+preload = ["./test-setup.ts"]

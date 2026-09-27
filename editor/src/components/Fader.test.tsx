@@ -1,6 +1,5 @@
-// @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { PARAMS } from '../model/schema';
 import { Fader } from './Fader';
 
@@ -10,7 +9,7 @@ const lines = { defaultDelayLines: 2, maxDelayLines: 5 };
 
 describe('Fader', () => {
   it('shows the real value and reports range moves', () => {
-    const onChange = vi.fn();
+    const onChange = mock();
     render(<Fader def={PARAMS['input.PreDelay']} value={0.070000000298023224} preset={lines} badges={['K1B']} onChange={onChange} onHover={() => {}} />);
     expect(screen.getByText('70ms')).toBeTruthy();
     expect(screen.getByText('K1B')).toBeTruthy();
@@ -19,7 +18,7 @@ describe('Fader', () => {
   });
 
   it('reverts out-of-range typed values and commits valid ones', () => {
-    const onChange = vi.fn();
+    const onChange = mock();
     render(<Fader def={PARAMS['input.PreDelay']} value={0.25} preset={lines} badges={[]} onChange={onChange} onHover={() => {}} />);
     const field = screen.getByLabelText('PREDLY value') as HTMLInputElement;
     fireEvent.change(field, { target: { value: '1.5' } });
@@ -30,7 +29,7 @@ describe('Fader', () => {
   });
 
   it('enters seeds as the engine integer', () => {
-    const onChange = vi.fn();
+    const onChange = mock();
     render(<Fader def={PARAMS['seeds.TapSeed']} value={0.00115} preset={lines} badges={[]} onChange={onChange} onHover={() => {}} />);
     const field = screen.getByLabelText('TAPSD seed') as HTMLInputElement;
     expect(field.value).toBe('1150');

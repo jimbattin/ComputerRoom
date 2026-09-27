@@ -1,7 +1,6 @@
-// @vitest-environment happy-dom
-import fixture from '../../../tests/fixtures/two_presets.toml?raw';
+import fixture from '../../../tests/fixtures/two_presets.toml' with { type: 'text' };
 import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { loadBank, type Preset } from '../model/bank';
 import { FlowPanel } from './FlowPanel';
 
@@ -14,7 +13,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const show = (preset: Preset = chorus, onBlock = vi.fn()) =>
+const show = (preset: Preset = chorus, onBlock = mock()) =>
   render(<FlowPanel preset={preset} page="input" focusKey={null} pinned={null} onBlock={onBlock} />);
 
 const blockEl = (container: Element, id: string) => container.querySelector(`g[data-block=${id}]`)!;
@@ -34,7 +33,7 @@ describe('FlowPanel', () => {
     expect(container.querySelector('g[data-block=ldiff] rect')!.getAttribute('x')).toBe('552');
     expect(container.querySelector('g[data-block=delay] rect')!.getAttribute('x')).toBe('650');
     const off = { ...chorus, params: { ...chorus.params, 'late.LateStageTap': 0 } };
-    rerender(<FlowPanel preset={off} page="input" focusKey={null} pinned={null} onBlock={vi.fn()} />);
+    rerender(<FlowPanel preset={off} page="input" focusKey={null} pinned={null} onBlock={mock()} />);
     expect(container.querySelector('g[data-block=delay] rect')!.getAttribute('x')).toBe('552');
     expect(container.querySelector('g[data-block=ldiff] rect')!.getAttribute('x')).toBe('650');
   });
@@ -48,7 +47,7 @@ describe('FlowPanel', () => {
   });
 
   it('reports a clicked block', () => {
-    const onBlock = vi.fn();
+    const onBlock = mock();
     const { container } = show(chorus, onBlock);
     fireEvent.click(blockEl(container, 'taps'));
     expect(onBlock).toHaveBeenCalledWith('taps');

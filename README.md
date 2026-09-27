@@ -145,14 +145,14 @@ validation checklist is [docs/HARDWARE_TESTS.md](docs/HARDWARE_TESTS.md).
 
 [editor/](editor/) is a local web app, styled after the Lexicon 480L LARC, that edits every
 field of a preset bank and talks to the pedal over Web MIDI. It runs in current Chrome and
-Firefox. Building it does not involve the firmware toolchain; it needs Node 22.12 or newer
-(`npm install` refuses older versions).
+Firefox. Building it does not involve the firmware toolchain; it needs [Bun](https://bun.sh)
+1.4.2 or newer, which installs the packages, serves, bundles and tests it (no Node.js or npm).
 
 Run it from source (development server):
 ```
 cd editor
-npm install          # once, and after package.json changes
-npm run dev          # http://localhost:5174
+bun install          # once, and after package.json changes
+bun run dev          # http://localhost:5174, reloads on source changes
 ```
 Open http://localhost:5174 in Chrome or Firefox with the pedal plugged in over USB. Use
 `localhost`, not a LAN address: Web MIDI SysEx only works in a secure context, and the port is
@@ -162,8 +162,8 @@ presets.toml as it is on disk.
 Build a static copy:
 ```
 cd editor
-npm run build        # type-checks, then writes editor/dist/ (git-ignored)
-npm run preview      # serves editor/dist/ at http://localhost:4174
+bun run build        # type-checks, then writes editor/dist/ (git-ignored)
+bun run preview      # serves editor/dist/ at http://localhost:4174
 ```
 editor/dist/ uses relative asset paths, so it can be served from any directory, but only over
 `localhost` or HTTPS, for the same secure-context reason. A build embeds presets.toml as it was
@@ -172,8 +172,8 @@ at build time: rebuild after editing it, or **PROJECT** loads the old bank.
 Checks (not part of `make test`):
 ```
 cd editor
-npm test             # Vitest unit tests
-npm run typecheck    # tsc --noEmit
+bun test             # unit tests (bun:test, DOM from happy-dom)
+bun run typecheck    # tsc --noEmit
 ```
 
 Using it:

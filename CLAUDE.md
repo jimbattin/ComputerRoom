@@ -55,12 +55,15 @@ DaisyCloudSeed/
 ├── third_party/tomlc99/   # Vendored TOML parser (MIT, commit in README.txt)
 ├── tools/                 # preset_check.cpp (host-side presets.toml validator),
 │                          # usb_preset_host.py (Linux USB-MIDI test host for docs/HARDWARE_TESTS.md)
-├── editor/                # Browser preset editor (Preact + Vite, Web MIDI; Node >= 22.12):
+├── editor/                # Browser preset editor (Preact, Web MIDI; Bun >= 1.4.2, no Node/npm):
 │                          # src/midi/ protocol v1 client + Web MIDI transport; src/model/ bank
 │                          # text model + validator mirroring src/preset_bank.cpp, schema,
 │                          # real-unit scaling, signal-flow model, editor state; src/components/
 │                          # + src/styles/larc.css LARC UI; src/io/ file open/save;
-│                          # *.test.ts(x) Vitest suites (`npm test`); dist/ is build output
+│                          # serve.ts Bun.serve dev server (HTML import, HMR) + dist/ preview;
+│                          # bunfig.toml; toml-text-plugin.ts (dev server: .toml as text);
+│                          # *.test.ts(x) bun:test suites (`bun test`, happy-dom preloaded by
+│                          # test-setup.ts); dist/ is `bun build` output
 ├── CLAUDE.md              # This file - agent-facing project documentation
 ├── README.md              # User-facing control table and build/flash instructions
 ├── license.txt            # License
@@ -561,7 +564,7 @@ covers `ValidStoredBankText()`; `ParsePresetBankText()` is covered in `preset_ba
 of them involve libdaisy.
 
 **Browser editor** ([editor/](editor/), user docs in README.md "Preset editor (browser)"): a
-Preact + Vite app (`npm run dev`, http://localhost:5174; `npm test`, Vitest) that is a
+Preact app on Bun (`bun run dev`, http://localhost:5174; `bun test`) that is a
 second host for this protocol, for Chrome and Firefox with one code path. Keep it in step
 with the firmware:
 - `editor/src/midi/protocol.ts` / `client.ts` port `src/preset_protocol.h` (INFO offsets as in
@@ -826,11 +829,16 @@ exits non-zero on any failed `CHECK()` ([tests/check.h](tests/check.h)):
 - `stored_bank_test` - `ValidStoredBankText()`: erased flash, wrong magic, a different firmware
   image, corrupted text or hash, and the 1..`kMaxTextBytes` length bounds
 
-The browser editor has its own Vitest suite, which `make test` does not run:
-`cd editor && npm test` (App, FlowPanel, Fader, flow, state, bank, scale, client, protocol).
+The browser editor has its own `bun:test` suite, which `make test` does not run:
+`cd editor && bun test` (App, FlowPanel, Fader, flow, state, bank, scale, client, protocol).
 It uses the same tests/fixtures/two_presets.toml, and `bank.test.ts` ports `kRejects` /
 `kAccepts` from `tests/preset_bank_test.cpp`. It also reads the live presets.toml and expects
-exactly 10 presets, so adding or removing a preset fails `npm test` (not `make test`).
+exactly 10 presets, so adding or removing a preset fails `bun test` (not `make test`).
+Both TOML files are imported `with { type: 'text' }` (tests and `src/io/files.ts`): a bare
+`.toml` import would make Bun parse the file instead of handing over its exact bytes. Bun's
+dev-server bundler ignores that attribute (observed on Bun 1.4.2: `bun run dev` inlined the
+parsed table), so `bunfig.toml` `[serve.static]` loads `.toml` as text through
+`editor/toml-text-plugin.ts`; `bun build` and `bun test` honour the attribute on their own.
 
 The parser test deliberately uses its own fixture, not presets.toml, so editing preset values
 never breaks `make test`; the live file stays covered by `make presets-check` and the build
@@ -1644,7 +1652,7 @@ Key changes in this fork:
     successful commit or revert reboots the pedal. Uploading, reverting, or reflashing all wipe
     saved user presets, because each changes one of the two hashes (firmware image, active
     bank text) that make up the user-preset `identity` (see "Firmware + bank identity" under "User preset save / factory restore")
-23. **Browser preset editor** ([editor/](editor/)): a Preact + Vite Web MIDI app that edits every
+23. **Browser preset editor** ([editor/](editor/)): a Preact Web MIDI app on Bun that edits every
     preset field, shows the signal flow, and uploads, reads back and reverts banks over
     protocol v1 (see "USB-MIDI preset upload")
 
@@ -1669,7 +1677,7 @@ make test          # Host unit tests (knob/toggle/footswitch state machines, pre
 make               # Build CloudSeed
 make program-boot  # One time: flash the Daisy bootloader (BOOT_SRAM prerequisite)
 make program-dfu   # Flash the app (reset, hold BOOT until rapid blink, then run)
-cd editor && npm install && npm run dev   # Browser preset editor (http://localhost:5174); npm test runs its Vitest suite
+cd editor && bun install && bun run dev   # Browser preset editor (http://localhost:5174); bun test runs its suite
 ```
 
 ### File Locations
@@ -1685,7 +1693,7 @@ cd editor && npm install && npm run dev   # Browser preset editor (http://localh
   [src/usb_midi_link.h](src/usb_midi_link.h)
 - Hardware validation checklist: [docs/HARDWARE_TESTS.md](docs/HARDWARE_TESTS.md), driven by
   `tools/usb_preset_host.py`
-- Browser preset editor: [editor/](editor/) (`npm run dev`; see "USB-MIDI preset upload")
+- Browser preset editor: [editor/](editor/) (`bun run dev`; see "USB-MIDI preset upload")
 
 ### Key Concepts
 - Buffer size: 48 samples

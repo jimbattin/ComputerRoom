@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { loadBank, type Preset } from './bank';
 import { BLOCKS, EFFECT, blockOn, blocksOfKey, lineCount, pageBlocks, type BlockId } from './flow';
 import { PARAM_KEYS } from './schema';
+import fixture from '../../../tests/fixtures/two_presets.toml' with { type: 'text' };
 
-const fixture = readFileSync(new URL('../../../tests/fixtures/two_presets.toml', import.meta.url), 'utf8');
 const loaded = loadBank(fixture);
 if (!loaded.ok) throw new Error(loaded.error);
 const chorus = loaded.presets[0];

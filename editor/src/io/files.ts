@@ -1,7 +1,10 @@
 // Local files through standard APIs both Chrome and Firefox implement: <input type=file> to
 // open, a Blob download to save (where it lands is the browser's download setting).
 
-export { default as projectPresets } from '../../../presets.toml?raw';
+import projectPresetsText from '../../../presets.toml' with { type: 'text' };
+
+/** The repo's presets.toml, verbatim: a text import, so Bun does not parse it as TOML. */
+export const projectPresets: string = projectPresetsText;
 
 export function openTomlFile(): Promise<{ text: string; name: string } | null> {
   const { promise, resolve, reject } = Promise.withResolvers<{ text: string; name: string } | null>();

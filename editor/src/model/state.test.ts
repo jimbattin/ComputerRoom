@@ -1,9 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { docText } from './bank';
 import { initialState, isDirty, presetChanges, problems, reducer, type Action, type EditorState } from './state';
-
-const fixture = readFileSync(new URL('../../../tests/fixtures/two_presets.toml', import.meta.url), 'utf8');
+import fixture from '../../../tests/fixtures/two_presets.toml' with { type: 'text' };
 
 const run = (s: EditorState, ...actions: Action[]) => actions.reduce(reducer, s);
 const loaded = run(initialState, { type: 'load', text: fixture, source: 'file', fileName: 'two.toml' });
