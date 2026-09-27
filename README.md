@@ -12,16 +12,21 @@ MIT License.
 - Up to 16 slots available (10 are included in the example presets.toml)
 
 ## Browser-Based Preset Editor (via Web MIDI)
-- Just plug into your Seed's USB port and pull up the editor on your browser
-- Don't want to flash a new presets.toml? No worries, there's an editor for that!
+Just plug into your Seed's USB port and pull up the editor on your browser. Don't want to flash a new presets.toml? No worries, there's an editor for that!
+
+![Editor](docs/editor.png)
 - Supports Chrome and Firefox
 - Can load presets directly from your device
 - Diagram showcasing signal flow of the reverb
+![Signal Flow](docs/signal-flow.png)
 
-## Secondary Controls
+## Assignable Knobs, Switches and Secondary Controls
 - Accessed by holding down the 2nd footswitch (FS2 - on the right)
 - Secondary function can be assigned to all 6 knobs and 4 switches
 - Can be assigned in [presets.toml](presets.toml) and via the [editor](editor/)
+
+![Knobs](docs/assign-knobs.png)
+![Switches](docs/assign-switches.png)
 
 ## Reverse Delay 
 - Reverb engine can be fed up to 2000ms of reversed audio rather than dry signal
@@ -35,7 +40,9 @@ MIT License.
 
 # Special Thanks
 [Ghost Note Audio](https://ghostnoteaudio.uk) for their work on [CloudSeed](https://github.com/ValdemarOrn/CloudSeed)
+
 [GuitarML's port of CloudSeed Reverb](https://github.com/GuitarML/DaisyCloudSeed) to the [PedalPCB Terrarium](https://www.pedalpcb.com/product/pcb351/)
+
 [PedalPCB](https://www.pedalpcb.com) and community :) 
 
 # DaisyCloudSeed (GuitarML fork for Terrarium)

@@ -66,7 +66,7 @@ DaisyCloudSeed/
 │                          # test-setup.ts); dist/ is `bun build` output
 ├── CLAUDE.md              # This file - agent-facing project documentation
 ├── README.md              # User-facing control table and build/flash instructions
-├── license.txt            # License
+├── LICENSE                # MIT license (this fork, Erwin Coumans' Daisy port, CloudSeed)
 └── .gitmodules            # Submodule definitions (DaisySP, libdaisy, Terrarium)
 ```
 
