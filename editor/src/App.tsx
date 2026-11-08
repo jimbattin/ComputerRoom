@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useReducer, useState } from 'preact/hooks';
-import { ConfirmDialog, Key, Led } from './components/controls';
-import { DevicePanel } from './components/DevicePanel';
-import { FlowPanel } from './components/FlowPanel';
-import { KnobMapPage, PageKeys, ParamPage, SetupPage, ToggleMapPage } from './components/pages';
-import { ProgramKeys } from './components/ProgramKeys';
-import { openTomlFile, projectPresets, saveTomlFile } from './io/files';
-import { PresetLink } from './midi/client';
-import { ProtocolError, fnv1a32, type InfoReply } from './midi/protocol';
-import { connectPedal, isWebMidiSupported } from './midi/webMidi';
-import { docText, loadBank } from './model/bank';
-import { BLOCKS, type BlockId } from './model/flow';
-import { initialState, isDirty, presetChanges, problems, reducer, type Source } from './model/state';
+import { useEffect, useMemo, useReducer, useState } from "preact/hooks";
+import { ConfirmDialog, Key, Led } from "./components/controls";
+import { DevicePanel } from "./components/DevicePanel";
+import { FlowPanel } from "./components/FlowPanel";
+import { ProgramKeys } from "./components/ProgramKeys";
+import { KnobMapPage, PageKeys, ParamPage, SetupPage, ToggleMapPage } from "./components/pages";
+import { openTomlFile, projectPresets, saveTomlFile } from "./io/files";
+import { PresetLink } from "./midi/client";
+import { fnv1a32, type InfoReply, ProtocolError } from "./midi/protocol";
+import { connectPedal, isWebMidiSupported } from "./midi/webMidi";
+import { docText, loadBank } from "./model/bank";
+import { BLOCKS, type BlockId } from "./model/flow";
+import { initialState, isDirty, presetChanges, problems, reducer, type Source } from "./model/state";
 
 interface Confirm {
   title: string;
@@ -39,6 +39,7 @@ export function App() {
   const { doc, presets, selected, page } = state;
   const preset = presets[selected];
   const changes = presets.map((_, i) => presetChanges(state, i));
+  const selectedChanges = changes[selected];
 
   const inSync = useMemo(
     () => !!info && !!doc && fnv1a32(new TextEncoder().encode(docText(doc))) === info.activeHash,
@@ -48,8 +49,8 @@ export function App() {
   useEffect(() => {
     if (!dirty) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
   function ask(title: string, body: string, confirmLabel: string): Promise<boolean> {
@@ -61,14 +62,14 @@ export function App() {
   /** Runs one operation: clears the previous status, reports any error, drops a dead link. */
   async function run(op: () => Promise<void>) {
     setStatus(null);
-    dispatch({ type: 'dismissError' });
+    dispatch({ type: "dismissError" });
     setBusy(true);
     try {
       await op();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setStatus(message);
-      if ((e instanceof ProtocolError && message.endsWith('no reply')) || message === 'pedal disconnected') {
+      if ((e instanceof ProtocolError && message.endsWith("no reply")) || message === "pedal disconnected") {
         setConnected(false);
       }
     } finally {
@@ -76,21 +77,20 @@ export function App() {
     }
   }
 
-  const discardOk = () =>
-    dirty ? ask('Unsaved edits', 'Discard unsaved edits?', 'Discard') : Promise.resolve(true);
+  const discardOk = () => (dirty ? ask("Unsaved edits", "Discard unsaved edits?", "Discard") : Promise.resolve(true));
 
   const load = (text: string, source: Source, fileName: string | null) =>
-    dispatch({ type: 'load', text, source, fileName });
+    dispatch({ type: "load", text, source, fileName });
 
   /** The bank text, if the pedal's own rules accept it; otherwise reports why. */
   function checkedText(): string | null {
     if (!doc) {
-      setStatus('NO BANK');
+      setStatus("NO BANK");
       return null;
     }
     const blocked = problems(state);
     if (blocked.length > 0) {
-      setStatus(blocked[0]);
+      setStatus(blocked[0]!);
       return null;
     }
     const text = docText(doc);
@@ -104,21 +104,21 @@ export function App() {
 
   const onProject = () =>
     run(async () => {
-      if (await discardOk()) load(projectPresets, 'project', null);
+      if (await discardOk()) load(projectPresets, "project", null);
     });
 
   const onOpen = () =>
     run(async () => {
       if (!(await discardOk())) return;
       const file = await openTomlFile();
-      if (file) load(file.text, 'file', file.name);
+      if (file) load(file.text, "file", file.name);
     });
 
   const onSave = () => {
     const text = checkedText();
     if (text === null) return;
-    saveTomlFile(text, state.fileName ?? 'presets.toml');
-    dispatch({ type: 'saved', text, fileName: state.fileName });
+    saveTomlFile(text, state.fileName ?? "presets.toml");
+    dispatch({ type: "saved", text, fileName: state.fileName });
   };
 
   const onConnect = () =>
@@ -135,7 +135,7 @@ export function App() {
     run(async () => {
       if (!link || !(await discardOk())) return;
       const text = await link.readAll((d, t) => setStatus(`READ ${pct(d, t)}%`));
-      load(text, 'pedal', null);
+      load(text, "pedal", null);
       setInfo(await link.info());
       setStatus(null);
     });
@@ -145,27 +145,27 @@ export function App() {
       const text = checkedText();
       if (!link || text === null) return;
       const ok = await ask(
-        'Upload bank',
-        'Upload to the pedal? The pedal reboots (about 3 s), the output is dry during the upload, and sounds saved on the pedal (FS1 hold) are erased.',
-        'Upload',
+        "Upload bank",
+        "Upload to the pedal? The pedal reboots (about 3 s), the output is dry during the upload, and sounds saved on the pedal (FS1 hold) are erased.",
+        "Upload",
       );
       if (!ok) return;
-      setStatus('UPLOAD 0%');
-      const after = await link.upload(text, (d, t) => setStatus(d < t ? `UPLOAD ${pct(d, t)}%` : 'REBOOT\u2026'));
-      afterReboot(after, 'UPLOADED - PRESS CONNECT TO VERIFY');
+      setStatus("UPLOAD 0%");
+      const after = await link.upload(text, (d, t) => setStatus(d < t ? `UPLOAD ${pct(d, t)}%` : "REBOOT\u2026"));
+      afterReboot(after, "UPLOADED - PRESS CONNECT TO VERIFY");
     });
 
   const onRevert = () =>
     run(async () => {
       if (!link) return;
       const ok = await ask(
-        'Revert pedal',
-        'Revert the pedal to its built-in bank? It reboots and erases sounds saved on the pedal.',
-        'Revert',
+        "Revert pedal",
+        "Revert the pedal to its built-in bank? It reboots and erases sounds saved on the pedal.",
+        "Revert",
       );
       if (!ok) return;
-      setStatus('REBOOT\u2026');
-      afterReboot(await link.revert(), 'REVERTED - PRESS CONNECT TO VERIFY');
+      setStatus("REBOOT\u2026");
+      afterReboot(await link.revert(), "REVERTED - PRESS CONNECT TO VERIFY");
     });
 
   function afterReboot(after: InfoReply | null, unverified: string) {
@@ -180,8 +180,12 @@ export function App() {
   }
 
   const display =
-    status ?? state.error ?? (preset ? `P${String(selected + 1).padStart(2, '0')} ${preset.name.toUpperCase()}` : '\u2014\u2014 NO BANK \u2014\u2014');
-  const origin = state.fileName ?? (state.source ? state.source.toUpperCase() : '');
+    status ??
+    state.error ??
+    (preset
+      ? `P${String(selected + 1).padStart(2, "0")} ${preset.name.toUpperCase()}`
+      : "\u2014\u2014 NO BANK \u2014\u2014");
+  const origin = state.fileName ?? (state.source ? state.source.toUpperCase() : "");
 
   return (
     <main class="larc">
@@ -193,7 +197,7 @@ export function App() {
         </div>
         <div class="main-display">
           <Led wide text={display} />
-          <Led small off={!dirty && !origin} text={[dirty ? 'EDITED' : '', origin].filter(Boolean).join('  ') || '-'} />
+          <Led small off={!dirty && !origin} text={[dirty ? "EDITED" : "", origin].filter(Boolean).join("  ") || "-"} />
         </div>
         <DevicePanel
           supported={supported}
@@ -214,37 +218,37 @@ export function App() {
         <Key label="SAVE" disabled={busy || !doc} onClick={onSave} />
       </div>
 
-      {doc && preset ? (
+      {doc && preset && selectedChanges ? (
         <>
           <div class="body">
             <ProgramKeys
               presets={presets}
               changes={changes}
               selected={selected}
-              onSelect={(i) => dispatch({ type: 'select', preset: i })}
-              onDuplicate={() => dispatch({ type: 'duplicate' })}
-              onDelete={() => dispatch({ type: 'delete' })}
+              onSelect={(i) => dispatch({ type: "select", preset: i })}
+              onDuplicate={() => dispatch({ type: "duplicate" })}
+              onDelete={() => dispatch({ type: "delete" })}
             />
             <div>
               <PageKeys
                 page={page}
-                changes={changes[selected]}
+                changes={selectedChanges}
                 onPage={(p) => {
-                  dispatch({ type: 'page', page: p });
+                  dispatch({ type: "page", page: p });
                   setFlowPin(null);
                 }}
               />
-              {page === 'knobs' ? (
-                <KnobMapPage preset={preset} changes={changes[selected]} dispatch={dispatch} onHover={setFocusKey} />
-              ) : page === 'toggles' ? (
-                <ToggleMapPage preset={preset} changes={changes[selected]} dispatch={dispatch} onHover={setFocusKey} />
-              ) : page === 'setup' ? (
-                <SetupPage preset={preset} changes={changes[selected]} dispatch={dispatch} />
+              {page === "knobs" ? (
+                <KnobMapPage preset={preset} changes={selectedChanges} dispatch={dispatch} onHover={setFocusKey} />
+              ) : page === "toggles" ? (
+                <ToggleMapPage preset={preset} changes={selectedChanges} dispatch={dispatch} onHover={setFocusKey} />
+              ) : page === "setup" ? (
+                <SetupPage preset={preset} changes={selectedChanges} dispatch={dispatch} />
               ) : (
                 <ParamPage
                   page={page}
                   preset={preset}
-                  changes={changes[selected]}
+                  changes={selectedChanges}
                   dispatch={dispatch}
                   onHover={setFocusKey}
                 />
@@ -257,7 +261,7 @@ export function App() {
             focusKey={focusKey}
             pinned={flowPin}
             onBlock={(id) => {
-              dispatch({ type: 'page', page: BLOCKS[id].page });
+              dispatch({ type: "page", page: BLOCKS[id].page });
               setFlowPin(id);
             }}
           />
@@ -266,20 +270,21 @@ export function App() {
         <p class="hint">Load the project presets.toml, open a file, or connect the pedal and READ.</p>
       )}
 
-      <ConfirmDialog
-        open={confirm !== null}
-        title={confirm?.title ?? ''}
-        body={confirm?.body ?? ''}
-        confirmLabel={confirm?.confirmLabel ?? ''}
-        onCancel={() => {
-          confirm?.resolve(false);
-          setConfirm(null);
-        }}
-        onConfirm={() => {
-          confirm?.resolve(true);
-          setConfirm(null);
-        }}
-      />
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          onCancel={() => {
+            confirm.resolve(false);
+            setConfirm(null);
+          }}
+          onConfirm={() => {
+            confirm.resolve(true);
+            setConfirm(null);
+          }}
+        />
+      )}
     </main>
   );
 }

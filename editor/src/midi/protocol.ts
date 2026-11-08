@@ -2,36 +2,36 @@
 // host guide: docs/USB_MIDI.md. Pure: no browser APIs.
 
 export const CMD = { INFO: 1, BEGIN: 2, DATA: 3, COMMIT: 4, REVERT: 5, READ: 6, ABORT: 7 } as const;
-export type Command = (typeof CMD)[keyof typeof CMD];
 
 export const CMD_NAMES: Record<number, string> = Object.fromEntries(
   Object.entries(CMD).map(([name, value]) => [value, name]),
 );
 
 export const STATUS_NAMES = [
-  'Ok',
-  'BadFrame',
-  'NoSession',
-  'BadSeq',
-  'BadLength',
-  'LengthMismatch',
-  'HashMismatch',
-  'ParseError',
-  'FlashError',
+  "Ok",
+  "BadFrame",
+  "NoSession",
+  "BadSeq",
+  "BadLength",
+  "LengthMismatch",
+  "HashMismatch",
+  "ParseError",
+  "FlashError",
 ] as const;
 
 export const STATUS_PARSE_ERROR = 7;
 
 export const HEADER = [0x7d, 0x43, 0x53] as const;
 
-// 7-bit little-endian integers (docs/USB_MIDI.md section 5).
+// 7-bit little-endian integers (docs/USB_MIDI.md section 5). The readers index the bytes unchecked:
+// callers pass a frame whose length covers the field.
 export const u14 = (v: number): number[] => [v & 0x7f, (v >>> 7) & 0x7f];
 export const u21 = (v: number): number[] => [...u14(v), (v >>> 14) & 0x7f];
 export const u32 = (v: number): number[] => [...u21(v), (v >>> 21) & 0x7f, (v >>> 28) & 0x0f];
-export const getU14 = (b: ArrayLike<number>, i: number): number => b[i] | (b[i + 1] << 7);
-export const getU21 = (b: ArrayLike<number>, i: number): number => getU14(b, i) | (b[i + 2] << 14);
+export const getU14 = (b: ArrayLike<number>, i: number): number => b[i]! | (b[i + 1]! << 7);
+export const getU21 = (b: ArrayLike<number>, i: number): number => getU14(b, i) | (b[i + 2]! << 14);
 export const getU32 = (b: ArrayLike<number>, i: number): number =>
-  (getU21(b, i) | (b[i + 3] << 21) | ((b[i + 4] & 0x0f) << 28)) >>> 0;
+  (getU21(b, i) | (b[i + 3]! << 21) | ((b[i + 4]! & 0x0f) << 28)) >>> 0;
 
 /** FNV-1a 32-bit (docs/USB_MIDI.md section 6). */
 export function fnv1a32(bytes: Uint8Array): number {
@@ -60,7 +60,7 @@ export interface Reply {
 export function parseReply(msg: Uint8Array): Reply | null {
   if (msg.length < 7 || msg[0] !== 0xf0 || msg[msg.length - 1] !== 0xf7) return null;
   if (msg[1] !== HEADER[0] || msg[2] !== HEADER[1] || msg[3] !== HEADER[2]) return null;
-  return { cmd: msg[4], status: msg[5], body: msg.slice(6, -1) };
+  return { cmd: msg[4]!, status: msg[5]!, body: msg.slice(6, -1) };
 }
 
 export interface InfoReply {
@@ -73,16 +73,19 @@ export interface InfoReply {
   presetCount: number;
 }
 
+const INFO_BYTES = 16;
+
 // Offsets as in tools/usb_preset_host.py info().
 export function decodeInfo(b: Uint8Array): InfoReply {
+  if (b.length < INFO_BYTES) throw new ProtocolError(`INFO: ${b.length}-byte reply, expected ${INFO_BYTES}`);
   return {
-    version: b[0],
+    version: b[0]!,
     maxTextBytes: getU21(b, 1),
     chunkBytes: getU14(b, 4),
-    source: b[6],
+    source: b[6]!,
     activeLength: getU21(b, 7),
     activeHash: getU32(b, 10),
-    presetCount: b[15],
+    presetCount: b[15]!,
   };
 }
 
@@ -90,7 +93,7 @@ export class ProtocolError extends Error {
   status?: number;
   constructor(message: string, status?: number) {
     super(message);
-    this.name = 'ProtocolError';
+    this.name = "ProtocolError";
     this.status = status;
   }
 }

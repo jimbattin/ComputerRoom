@@ -1,6 +1,6 @@
-import '@picocss/pico/css/pico.min.css';
-import './styles/larc.css';
-import { render } from 'preact';
-import { App } from './app';
+import { render } from "preact";
+import { App } from "./App";
 
-render(<App />, document.getElementById('app')!);
+const root = document.getElementById("root");
+if (!root) throw new Error("editor.html has no #root");
+render(<App />, root);

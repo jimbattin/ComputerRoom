@@ -147,23 +147,19 @@ define require_bun
 		exit 1; }
 endef
 
-# Installs the editor's packages from bun.lock, then runs the dev server at
-# http://localhost:5174 until Ctrl-C.
+# Installs the editor's packages from bun.lock (once), then runs `make -C editor serve`:
+# the dev server at http://localhost:5174 until Ctrl-C.
 editor:
 	$(require_bun)
-	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run dev
+	$(MAKE) -C editor serve BUN=$(BUN)
 
 # The whole editor - JS, CSS and the repo's presets.toml (PROJECT) - inlined into one
-# stand-alone HTML file that a browser can open straight from disk.
-EDITOR_INPUTS = editor/index.html editor/package.json editor/bun.lock editor/tsconfig.json \
-                $(shell find editor/src -type f) presets.toml
-
-$(BUILD_DIR)/editor.html: $(EDITOR_INPUTS) | $(BUILD_DIR)
+# stand-alone HTML file that a browser can open straight from disk. editor/Makefile keeps
+# editor/dist/editor.html incremental; build/editor.html is the release copy.
+editor-html: | $(BUILD_DIR)
 	$(require_bun)
-	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run typecheck && \
-		$(BUN) build ./index.html --compile --target=browser --minify --outfile=$(CURDIR)/$@
-
-editor-html: $(BUILD_DIR)/editor.html
+	$(MAKE) -C editor html BUN=$(BUN)
+	cp editor/dist/editor.html $(BUILD_DIR)/editor.html
 
 .PHONY: editor editor-html
 

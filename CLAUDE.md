@@ -61,11 +61,14 @@ DaisyCloudSeed/
 │                          # text model + validator mirroring src/preset_bank.cpp, schema,
 │                          # real-unit scaling, signal-flow model, editor state; src/components/
 │                          # + src/styles/larc.css LARC UI; src/io/ file open/save;
-│                          # serve.ts Bun.serve dev server (HTML import, HMR) + dist/ preview;
-│                          # bunfig.toml; toml-text-plugin.ts (dev server: .toml as text);
-│                          # *.test.ts(x) bun:test suites (`bun test`, happy-dom preloaded by
-│                          # test-setup.ts); dist/ is `bun build` output; `make editor-html`
-│                          # inlines everything into one build/editor.html (Makefile)
+│                          # src/editor.html entry (links larc.css, which @imports Pico);
+│                          # server.ts Bun.serve dev server (HTML import, HMR); build.ts
+│                          # single-file Bun.build to dist/editor.html; Makefile (serve/html/
+│                          # test/check/fmt/clean, stamped `bun install --frozen-lockfile`);
+│                          # biome.jsonc (lint + format + import order); strict tsconfig.json
+│                          # (noUncheckedIndexedAccess); bunfig.toml; toml-text-plugin.ts
+│                          # (dev server: .toml as text); *.test.ts(x) bun:test suites
+│                          # (happy-dom preloaded by test-setup.ts)
 ├── CLAUDE.md              # This file - agent-facing project documentation
 ├── README.md              # User-facing control table and build/flash instructions
 ├── LICENSE                # MIT license (this fork, Erwin Coumans' Daisy port, CloudSeed)
@@ -595,7 +598,7 @@ covers `ValidStoredBankText()`; `ParsePresetBankText()` is covered in `preset_ba
 of them involve libdaisy.
 
 **Browser editor** ([editor/](editor/), user docs in README.md "Preset editor (browser)"): a
-Preact app on Bun (`bun run dev`, http://localhost:5174; `bun test`) that is a
+Preact app on Bun (`make -C editor serve`, http://localhost:5174; `make -C editor test check`) that is a
 second host for this protocol, for Chrome and Firefox with one code path. Keep it in step
 with the firmware:
 - `editor/src/midi/protocol.ts` / `client.ts` port `src/preset_protocol.h` (INFO offsets as in
@@ -863,15 +866,18 @@ exits non-zero on any failed `CHECK()` ([tests/check.h](tests/check.h)):
   image, corrupted text or hash, and the 1..`kMaxTextBytes` length bounds
 
 The browser editor has its own `bun:test` suite, which `make test` does not run:
-`cd editor && bun test` (App, FlowPanel, Fader, flow, state, bank, scale, client, protocol).
+`make -C editor test` (App, FlowPanel, Fader, flow, state, bank, scale, client, protocol);
+`make -C editor check` runs `tsc --noEmit` and `biome check`, and `make -C editor fmt` applies
+Biome's formatting and safe fixes.
 It uses the same tests/fixtures/two_presets.toml, and `bank.test.ts` ports `kRejects` /
 `kAccepts` from `tests/preset_bank_test.cpp`. It also reads the live presets.toml and expects
 exactly 10 presets, so adding or removing a preset fails `bun test` (not `make test`).
 Both TOML files are imported `with { type: 'text' }` (tests and `src/io/files.ts`): a bare
 `.toml` import would make Bun parse the file instead of handing over its exact bytes. Bun's
-dev-server bundler ignores that attribute (observed on Bun 1.4.2: `bun run dev` inlined the
+dev-server bundler ignores that attribute (observed on Bun 1.4.2: the dev server inlined the
 parsed table), so `bunfig.toml` `[serve.static]` loads `.toml` as text through
-`editor/toml-text-plugin.ts`; `bun build` and `bun test` honour the attribute on their own.
+`editor/toml-text-plugin.ts`; `Bun.build` (editor/build.ts) and `bun test` honour the attribute
+on their own.
 
 The parser test deliberately uses its own fixture, not presets.toml, so editing preset values
 never breaks `make test`; the live file stays covered by `make presets-check` and the build
@@ -884,10 +890,11 @@ Located in `build/`:
 - **{target}.elf** - ELF executable with debug symbols
 - **{target}.hex** - Intel HEX format
 - **{target}.map** - Linker map file
-- **editor.html** - the browser editor as one stand-alone file (`make editor-html`: `bun build
-  ./index.html --compile --target=browser`, JS/CSS/presets.toml inlined; opens from `file://`).
-  A file rule over editor/src, editor/index.html, the package files and presets.toml, so it
-  rebuilds only when one of them changes
+- **editor.html** - the browser editor as one stand-alone file (`make editor-html`: runs
+  `make -C editor html`, a `Bun.build` with `compile: true, target: "browser"` in
+  editor/build.ts, then copies editor/dist/editor.html here; JS/CSS/presets.toml inlined; opens
+  from `file://`). editor/Makefile rebuilds it only when editor/src, build.ts, the package files
+  or presets.toml change
 
 This project builds with `APP_TYPE = BOOT_SRAM` (`Makefile:6`): the application is loaded into
 SRAM from QSPI flash by the Daisy bootloader, which is what allows room for all ten presets.
@@ -1715,9 +1722,9 @@ make test          # Host unit tests (knob/toggle/footswitch state machines, pre
 make               # Build CloudSeed
 make program-boot  # One time: flash the Daisy bootloader (BOOT_SRAM prerequisite)
 make program-dfu   # Flash the app (reset, hold BOOT until rapid blink, then run)
-make editor        # Browser preset editor: bun install + dev server (http://localhost:5174); needs Bun
+make editor        # Browser preset editor: make -C editor serve (bun install + dev server, http://localhost:5174); needs Bun
 make editor-html   # Browser preset editor as one stand-alone file: build/editor.html (opens from file://)
-cd editor && bun test   # the editor's test suite (not part of make test)
+make -C editor test check   # the editor's tests, tsc and Biome (not part of make test)
 ```
 
 ### File Locations

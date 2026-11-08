@@ -1,7 +1,20 @@
-import type { ComponentChildren } from 'preact';
+import type { ComponentChildren } from "preact";
+import { useEffect, useRef } from "preact/hooks";
+
+/** `text`, plus the value as last loaded or saved when it differs (`original` set). */
+export const withOriginal = (text: string, original: string | undefined): string =>
+  original === undefined ? text : `${text}\nOriginal: ${original}`;
+
+/** Pointer and keyboard focus handlers that report `key` to `onHover`, and null on leave. */
+export const hoverHandlers = (key: string, onHover: (key: string | null) => void) => ({
+  onMouseEnter: () => onHover(key),
+  onMouseLeave: () => onHover(null),
+  onFocusIn: () => onHover(key),
+  onFocusOut: () => onHover(null),
+});
 
 export function Led({ text, wide, small, off }: { text: string; wide?: boolean; small?: boolean; off?: boolean }) {
-  const cls = ['led', wide && 'wide', small && 'small', off && 'off'].filter(Boolean).join(' ');
+  const cls = ["led", wide && "wide", small && "small", off && "off"].filter(Boolean).join(" ");
   return (
     <div class={cls} title={text}>
       {text}
@@ -17,7 +30,7 @@ export interface KeyProps {
   wide?: boolean;
   title?: string;
   /** Edit mark in the top-right corner: a dot for changed, a ring for added since load/save. */
-  mark?: 'edited' | 'added';
+  mark?: "edited" | "added";
   onClick: () => void;
 }
 
@@ -25,8 +38,8 @@ export function Key({ label, pressed, disabled, dark, wide, title, mark, onClick
   return (
     <button
       type="button"
-      class={['key', dark && 'dark', wide && 'wide', mark].filter(Boolean).join(' ')}
-      aria-pressed={pressed ? 'true' : 'false'}
+      class={["key", dark && "dark", wide && "wide", mark].filter(Boolean).join(" ")}
+      aria-pressed={pressed ? "true" : "false"}
       disabled={disabled}
       title={title}
       onClick={onClick}
@@ -66,7 +79,7 @@ export function NumberField({ value, min, max, step, display, onCommit, label, c
       value={display(value)}
       onChange={(e) => {
         const el = e.currentTarget;
-        let n = el.value.trim() === '' ? NaN : Number(el.value);
+        let n = el.value.trim() === "" ? NaN : Number(el.value);
         if (!Number.isFinite(n) || n < min || n > max) {
           el.value = display(value);
           return;
@@ -80,7 +93,6 @@ export function NumberField({ value, min, max, step, display, onCommit, label, c
 }
 
 export interface ConfirmDialogProps {
-  open: boolean;
   title: string;
   body: ComponentChildren;
   confirmLabel: string;
@@ -88,10 +100,22 @@ export interface ConfirmDialogProps {
   onCancel: () => void;
 }
 
-export function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCancel }: ConfirmDialogProps) {
-  if (!open) return null;
+/**
+ * A modal confirmation, shown while mounted. showModal() makes the page behind it inert and moves
+ * focus to the first button (Cancel); Escape cancels.
+ */
+export function ConfirmDialog({ title, body, confirmLabel, onConfirm, onCancel }: ConfirmDialogProps) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => ref.current?.showModal(), []);
   return (
-    <dialog open>
+    <dialog
+      ref={ref}
+      onCancel={(e) => {
+        // Escape: unmounting closes the dialog, so the browser need not.
+        e.preventDefault();
+        onCancel();
+      }}
+    >
       <article>
         <header>
           <strong>{title}</strong>
@@ -100,8 +124,8 @@ export function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCa
         <footer>
           <button type="button" class="secondary" onClick={onCancel}>
             Cancel
-          </button>{' '}
-          <button type="button" onClick={onConfirm} autoFocus>
+          </button>{" "}
+          <button type="button" onClick={onConfirm}>
             {confirmLabel}
           </button>
         </footer>

@@ -1,22 +1,22 @@
 import {
-  MAX_NAME_BYTES,
-  MAX_PRESETS,
-  TOTAL_LINE_COUNT,
+  type BankDoc,
   deletePreset,
   docText,
   duplicatePreset,
   formatNorm,
   loadBank,
-  setField,
-  type BankDoc,
+  MAX_NAME_BYTES,
+  MAX_PRESETS,
   type Preset,
-} from './bank';
-import { KNOB_TARGETS, TOGGLE_TARGETS, type PageId } from './schema';
+  setField,
+  TOTAL_LINE_COUNT,
+} from "./bank";
+import { KNOB_TARGETS, type PageId, TOGGLE_TARGETS } from "./schema";
 
-export type Source = 'project' | 'file' | 'pedal';
+export type Source = "project" | "file" | "pedal";
 
 /** Where a current preset came from: its index in `baseline`, and whether it was duplicated since. */
-export interface Origin {
+interface Origin {
   index: number;
   added: boolean;
 }
@@ -38,33 +38,40 @@ export interface EditorState {
 }
 
 export type ScalarField =
-  | 'blinks'
-  | 'led_on_ms'
-  | 'led_off_ms'
-  | 'led_pause_ms'
-  | 'default_delay_lines'
-  | 'max_delay_lines';
+  | "blinks"
+  | "led_on_ms"
+  | "led_off_ms"
+  | "led_pause_ms"
+  | "default_delay_lines"
+  | "max_delay_lines";
+
+export type MapKind = "knob" | "toggle";
+
+/** Per map kind: the `Preset` property, the TOML table, its slot count, and its valid targets. */
+export const MAPS = {
+  knob: { prop: "knobMap", table: "knob_map", slots: 6, targets: KNOB_TARGETS },
+  toggle: { prop: "toggleMap", table: "toggle_map", slots: 4, targets: TOGGLE_TARGETS },
+} as const;
 
 export type Action =
-  | { type: 'load'; text: string; source: Source; fileName: string | null }
-  | { type: 'select'; preset: number }
-  | { type: 'page'; page: PageId }
-  | { type: 'setParam'; key: string; value: number }
-  | { type: 'setName'; name: string }
-  | { type: 'setScalar'; field: ScalarField; value: number }
-  | { type: 'setKnob'; bank: 0 | 1; knob: number; target: string }
-  | { type: 'setToggle'; bank: 0 | 1; toggle: number; target: string }
-  | { type: 'duplicate' }
-  | { type: 'delete' }
-  | { type: 'saved'; text: string; fileName: string | null }
-  | { type: 'dismissError' };
+  | { type: "load"; text: string; source: Source; fileName: string | null }
+  | { type: "select"; preset: number }
+  | { type: "page"; page: PageId }
+  | { type: "setParam"; key: string; value: number }
+  | { type: "setName"; name: string }
+  | { type: "setScalar"; field: ScalarField; value: number }
+  | { type: "setTarget"; kind: MapKind; bank: 0 | 1; slot: number; target: string }
+  | { type: "duplicate" }
+  | { type: "delete" }
+  | { type: "saved"; text: string; fileName: string | null }
+  | { type: "dismissError" };
 
 export const initialState: EditorState = {
   doc: null,
   presets: [],
   selected: 0,
-  page: 'input',
-  savedText: '',
+  page: "input",
+  savedText: "",
   baseline: [],
   origins: [],
   source: null,
@@ -76,10 +83,10 @@ export const isDirty = (s: EditorState): boolean => s.doc !== null && docText(s.
 
 /** Blocks save and upload: the only rule the editor itself can break. */
 export const problems = (s: EditorState): string[] =>
-  s.presets.flatMap((p, i) => (p.name === '' ? [`preset ${i}: empty name`] : []));
+  s.presets.flatMap((p, i) => (p.name === "" ? [`preset ${i}: empty name`] : []));
 
 /** Printable ASCII without `"` and `\`, so a name is always a plain TOML basic string. */
-export const sanitizeName = (name: string): string => name.replace(/[^\x20-\x7e]|["\\]/g, '').slice(0, MAX_NAME_BYTES);
+export const sanitizeName = (name: string): string => name.replace(/[^\x20-\x7e]|["\\]/g, "").slice(0, MAX_NAME_BYTES);
 
 /**
  * Changes of one preset against its baseline. Field ids: `params.<group.Key>`, `knob.<bank>.<i>`,
@@ -92,18 +99,33 @@ export interface PresetChanges {
   fields: Record<string, true>;
 }
 
-export const SETUP_FIELDS = ['name', 'blinks', 'ledOnMs', 'ledOffMs', 'ledPauseMs', 'defaultDelayLines', 'maxDelayLines'] as const;
+export const SETUP_FIELDS = [
+  "name",
+  "blinks",
+  "ledOnMs",
+  "ledOffMs",
+  "ledPauseMs",
+  "defaultDelayLines",
+  "maxDelayLines",
+] as const;
 
 export function presetChanges(s: EditorState, i: number): PresetChanges {
   const p = s.presets[i];
-  const { index, added } = s.origins[i];
-  const original = s.baseline[index];
+  const origin = s.origins[i];
+  if (!p || !origin) throw new Error(`no preset ${i}`);
+  const { index, added } = origin;
+  // origins[] is index-aligned with presets[] and always points into baseline[].
+  const original = s.baseline[index]!;
   const fields: Record<string, true> = {};
   for (const f of SETUP_FIELDS) if (p[f] !== original[f]) fields[f] = true;
   for (const k in p.params) if (p.params[k] !== original.params[k]) fields[`params.${k}`] = true;
   for (const bank of [0, 1] as const) {
-    p.knobMap[bank].forEach((t, k) => t !== original.knobMap[bank][k] && (fields[`knob.${bank}.${k}`] = true));
-    p.toggleMap[bank].forEach((t, k) => t !== original.toggleMap[bank][k] && (fields[`toggle.${bank}.${k}`] = true));
+    p.knobMap[bank].forEach((t, k) => {
+      if (t !== original.knobMap[bank][k]) fields[`knob.${bank}.${k}`] = true;
+    });
+    p.toggleMap[bank].forEach((t, k) => {
+      if (t !== original.toggleMap[bank][k]) fields[`toggle.${bank}.${k}`] = true;
+    });
   }
   return { original, added, fields };
 }
@@ -113,20 +135,20 @@ const identityOrigins = (presets: Preset[]): Origin[] => presets.map((_, index) 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /** The `Preset` property each scalar field edits. */
-export const SCALAR_PROP: Record<ScalarField, Exclude<(typeof SETUP_FIELDS)[number], 'name'>> = {
-  blinks: 'blinks',
-  led_on_ms: 'ledOnMs',
-  led_off_ms: 'ledOffMs',
-  led_pause_ms: 'ledPauseMs',
-  default_delay_lines: 'defaultDelayLines',
-  max_delay_lines: 'maxDelayLines',
+export const SCALAR_PROP: Record<ScalarField, Exclude<(typeof SETUP_FIELDS)[number], "name">> = {
+  blinks: "blinks",
+  led_on_ms: "ledOnMs",
+  led_off_ms: "ledOffMs",
+  led_pause_ms: "ledPauseMs",
+  default_delay_lines: "defaultDelayLines",
+  max_delay_lines: "maxDelayLines",
 };
 
 /** Patches one field of the selected preset in both the text and the parsed copy. */
 function edit(s: EditorState, field: string, literal: string, update: Partial<Preset>): EditorState {
   const doc = setField(s.doc!, s.selected, field, literal);
   const presets = [...s.presets];
-  presets[s.selected] = { ...presets[s.selected], ...update };
+  presets[s.selected] = { ...presets[s.selected]!, ...update };
   return { ...s, doc, presets };
 }
 
@@ -138,7 +160,7 @@ function reload(text: string) {
 }
 
 export function reducer(s: EditorState, a: Action): EditorState {
-  if (a.type === 'load') {
+  if (a.type === "load") {
     const r = loadBank(a.text);
     if (!r.ok) return { ...s, error: r.error };
     return {
@@ -154,76 +176,74 @@ export function reducer(s: EditorState, a: Action): EditorState {
       error: null,
     };
   }
-  if (a.type === 'page') return { ...s, page: a.page };
-  if (a.type === 'dismissError') return { ...s, error: null };
-  if (a.type === 'saved')
+  if (a.type === "page") return { ...s, page: a.page };
+  if (a.type === "dismissError") return { ...s, error: null };
+  if (a.type === "saved")
     return { ...s, savedText: a.text, fileName: a.fileName, baseline: s.presets, origins: identityOrigins(s.presets) };
   if (!s.doc) return s;
 
-  const preset = s.presets[s.selected];
+  // `select` keeps `selected` within presets[], which is never empty once a bank is loaded.
+  const preset = s.presets[s.selected]!;
   switch (a.type) {
-    case 'select':
+    case "select":
       return a.preset >= 0 && a.preset < s.presets.length ? { ...s, selected: a.preset } : s;
 
-    case 'setParam': {
+    case "setParam": {
       if (!(a.key in preset.params)) return s;
       const v = Number(formatNorm(clamp(a.value, 0, 1)));
       return edit(s, `params.${a.key}`, formatNorm(v), { params: { ...preset.params, [a.key]: v } });
     }
 
-    case 'setName': {
+    case "setName": {
       const name = sanitizeName(a.name);
-      return edit(s, 'name', `"${name}"`, { name });
+      return edit(s, "name", `"${name}"`, { name });
     }
 
-    case 'setScalar': {
+    case "setScalar": {
       const n = Math.round(a.value);
       if (!Number.isFinite(n)) return s;
       let v: number;
       switch (a.field) {
-        case 'blinks':
+        case "blinks":
           v = clamp(n, 1, 20);
           break;
-        case 'default_delay_lines':
+        case "default_delay_lines":
           v = clamp(n, 1, Math.min(TOTAL_LINE_COUNT, preset.maxDelayLines));
           break;
-        case 'max_delay_lines':
+        case "max_delay_lines":
           v = clamp(n, Math.max(1, preset.defaultDelayLines), TOTAL_LINE_COUNT);
           break;
         default:
           v = clamp(n, 0, 60000);
       }
-      const literal = a.field.endsWith('delay_lines') ? `${v}.0` : String(v);
+      const literal = a.field.endsWith("delay_lines") ? `${v}.0` : String(v);
       const next = edit(s, a.field, literal, { [SCALAR_PROP[a.field]]: v });
       // Inserting an absent LED timing adds a line, so the parsed copy is rebuilt from the text.
-      return next.doc!.lines.length === s.doc.lines.length ? next : { ...next, presets: reload(docText(next.doc!)).presets };
+      return next.doc!.lines.length === s.doc.lines.length
+        ? next
+        : { ...next, presets: reload(docText(next.doc!)).presets };
     }
 
-    case 'setKnob': {
-      if (!KNOB_TARGETS.includes(a.target) || a.knob < 0 || a.knob > 5) return s;
-      const knobMap: [string[], string[]] = [[...preset.knobMap[0]], [...preset.knobMap[1]]];
-      knobMap[a.bank][a.knob] = a.target;
-      return edit(s, `knob_map.knob${a.knob + 1}_${a.bank ? 'b' : 'a'}`, `"${a.target}"`, { knobMap });
+    case "setTarget": {
+      const m = MAPS[a.kind];
+      if (!m.targets.includes(a.target) || a.slot < 0 || a.slot >= m.slots) return s;
+      const map: [string[], string[]] = [[...preset[m.prop][0]], [...preset[m.prop][1]]];
+      map[a.bank][a.slot] = a.target;
+      const field = `${m.table}.${a.kind}${a.slot + 1}_${a.bank ? "b" : "a"}`;
+      return edit(s, field, `"${a.target}"`, { [m.prop]: map });
     }
 
-    case 'setToggle': {
-      if (!TOGGLE_TARGETS.includes(a.target) || a.toggle < 0 || a.toggle > 3) return s;
-      const toggleMap: [string[], string[]] = [[...preset.toggleMap[0]], [...preset.toggleMap[1]]];
-      toggleMap[a.bank][a.toggle] = a.target;
-      return edit(s, `toggle_map.toggle${a.toggle + 1}_${a.bank ? 'b' : 'a'}`, `"${a.target}"`, { toggleMap });
-    }
-
-    case 'duplicate': {
+    case "duplicate": {
       if (s.presets.length >= MAX_PRESETS) return s;
       const index = s.presets.length;
       let doc = duplicatePreset(s.doc, s.selected);
-      doc = setField(doc, index, 'name', `"${preset.name.slice(0, MAX_NAME_BYTES - 5)} copy"`);
-      doc = setField(doc, index, 'blinks', String(Math.min(index + 1, 20)));
-      const origins = [...s.origins, { index: s.origins[s.selected].index, added: true }];
+      doc = setField(doc, index, "name", `"${preset.name.slice(0, MAX_NAME_BYTES - 5)} copy"`);
+      doc = setField(doc, index, "blinks", String(Math.min(index + 1, 20)));
+      const origins = [...s.origins, { index: s.origins[s.selected]!.index, added: true }];
       return { ...s, doc, presets: reload(docText(doc)).presets, origins, selected: index };
     }
 
-    case 'delete': {
+    case "delete": {
       if (s.presets.length <= 1) return s;
       const { doc, presets } = reload(docText(deletePreset(s.doc, s.selected)));
       const origins = s.origins.filter((_, i) => i !== s.selected);

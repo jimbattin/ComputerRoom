@@ -160,41 +160,32 @@ Run it from source (development server), from the repo root:
 make editor          # bun install from bun.lock, then http://localhost:5174 (Ctrl-C stops it)
 ```
 It stops with a pointer to https://bun.sh if `bun` is not on the PATH (`make editor BUN=/path/to/bun`
-picks another binary). The same by hand:
+picks another binary). The same from editor/, where `make serve PORT=5175` picks another port:
 ```
 cd editor
-bun install          # once, and after package.json changes
-bun run dev          # http://localhost:5174, reloads on source changes
+make serve           # bun install when package.json/bun.lock changed, then the dev server
 ```
 Open http://localhost:5174 in Chrome or Firefox with the pedal plugged in over USB. Use
-`localhost`, not a LAN address: Web MIDI SysEx only works in a secure context, and the port is
-fixed, so the server exits if 5174 is already in use. Here **PROJECT** reads the repo's
-presets.toml as it is on disk.
-
-Build a static copy:
-```
-cd editor
-bun run build        # type-checks, then writes editor/dist/ (git-ignored)
-bun run preview      # serves editor/dist/ at http://localhost:4174
-```
-editor/dist/ uses relative asset paths, so it can be served from any directory, but only over
-`localhost` or HTTPS, for the same secure-context reason. A build embeds presets.toml as it was
-at build time: rebuild after editing it, or **PROJECT** loads the old bank.
+`localhost`, not a LAN address: Web MIDI SysEx only works in a secure context, and the server
+exits if its port is already in use. Here **PROJECT** reads the repo's presets.toml as it is on
+disk.
 
 Or build the whole editor into one stand-alone file, from the repo root:
 ```
-make editor-html     # bun install + type-check, then writes build/editor.html
+make editor-html     # make -C editor html (writes editor/dist/editor.html), copied to build/editor.html
 ```
 build/editor.html has the JavaScript, CSS and presets.toml inlined and loads nothing else, so it
 can be opened straight from disk (`file://`) or copied anywhere. Chromium treats `file://` as a
 secure context, so Web MIDI is available there. It is rebuilt only when an editor source or
-presets.toml changes, and like dist/ it carries presets.toml as it was at build time.
+presets.toml changes, and it carries presets.toml as it was at build time: rebuild after editing
+it, or **PROJECT** loads the old bank.
 
 Checks (not part of `make test`):
 ```
 cd editor
-bun test             # unit tests (bun:test, DOM from happy-dom)
-bun run typecheck    # tsc --noEmit
+make test            # unit tests (bun:test, DOM from happy-dom)
+make check           # tsc --noEmit, then biome check (lint, format, import order)
+make fmt             # biome check --write: apply formatting and safe fixes
 ```
 
 Using it:

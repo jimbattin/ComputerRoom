@@ -1,5 +1,5 @@
 [run]
-# Run package.json scripts and node_modules/.bin tools (tsc) on Bun, even with a `node` shebang.
+# Run node_modules/.bin tools (`bun x tsc`, `bun x biome`) on Bun, even with a `node` shebang.
 bun = true
 
 [serve.static]

@@ -1,5 +1,5 @@
-import type { InfoReply } from '../midi/protocol';
-import { Key, Led } from './controls';
+import type { InfoReply } from "../midi/protocol";
+import { Key, Led } from "./controls";
 
 export interface DevicePanelProps {
   supported: boolean;
@@ -20,16 +20,16 @@ export function DevicePanel(p: DevicePanelProps) {
   return (
     <div class="device panel">
       <div class="silk">
-        <span class={p.connected ? 'status-led on' : 'status-led'} />
+        <span class={p.connected ? "status-led on" : "status-led"} />
         Pedal
       </div>
       {!p.supported ? (
         <Led small text="NO WEB MIDI - USE CHROME OR FIREFOX" />
       ) : info && p.connected ? (
         <>
-          <Led small text={`SRC ${info.source === 1 ? 'UPLOAD' : 'BUILT-IN'}  PRE ${info.presetCount}`} />
-          <Led small text={`LEN ${info.activeLength}  HASH 0x${info.activeHash.toString(16).padStart(8, '0')}`} />
-          <Led small text={p.inSync ? 'SYNC' : 'DIFF'} />
+          <Led small text={`SRC ${info.source === 1 ? "UPLOAD" : "BUILT-IN"}  PRE ${info.presetCount}`} />
+          <Led small text={`LEN ${info.activeLength}  HASH 0x${info.activeHash.toString(16).padStart(8, "0")}`} />
+          <Led small text={p.inSync ? "SYNC" : "DIFF"} />
         </>
       ) : (
         <Led small off text="NOT CONNECTED" />

@@ -1,21 +1,21 @@
 import {
+  buildFrame,
   CMD,
   CMD_NAMES,
-  STATUS_NAMES,
-  STATUS_PARSE_ERROR,
-  ProtocolError,
-  buildFrame,
   decodeInfo,
   fnv1a32,
   getU14,
   getU21,
+  type InfoReply,
+  ProtocolError,
   parseReply,
+  type Reply,
+  STATUS_NAMES,
+  STATUS_PARSE_ERROR,
   u14,
   u21,
   u32,
-  type InfoReply,
-  type Reply,
-} from './protocol';
+} from "./protocol";
 
 export interface MidiTransport {
   send(msg: Uint8Array): void;
@@ -27,7 +27,7 @@ export interface MidiTransport {
 export class RebootTimeoutError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'RebootTimeoutError';
+    this.name = "RebootTimeoutError";
   }
 }
 
@@ -90,7 +90,7 @@ export class PresetLink {
       if (!reply) continue;
       if (reply.status !== 0) {
         const status = STATUS_NAMES[reply.status] ?? `status ${reply.status}`;
-        const detail = reply.status === STATUS_PARSE_ERROR ? `: ${String.fromCharCode(...reply.body)}` : '';
+        const detail = reply.status === STATUS_PARSE_ERROR ? `: ${String.fromCharCode(...reply.body)}` : "";
         throw new ProtocolError(`${name}: ${status}${detail}`, reply.status);
       }
       return reply;
@@ -111,7 +111,7 @@ export class PresetLink {
       const { body } = await this.call(CMD.READ, u14(index));
       total = getU21(body, 2);
       const data = body.slice(5);
-      if (data.length === 0 && received < total) throw new ProtocolError('READ: empty chunk');
+      if (data.length === 0 && received < total) throw new ProtocolError("READ: empty chunk");
       chunks.push(data);
       received += data.length;
       onProgress?.(Math.min(received, total), total);
@@ -123,8 +123,8 @@ export class PresetLink {
       off += c.length;
     }
     const info = await this.info();
-    if (fnv1a32(bytes) !== info.activeHash) throw new ProtocolError('READ: hash mismatch');
-    return new TextDecoder('ascii').decode(bytes);
+    if (fnv1a32(bytes) !== info.activeHash) throw new ProtocolError("READ: hash mismatch");
+    return new TextDecoder("ascii").decode(bytes);
   }
 
   /**
@@ -159,7 +159,7 @@ export class PresetLink {
     const after = await this.afterReboot();
     if (!after) return null;
     if (after.source !== 1 || after.activeHash !== hash) {
-      throw new ProtocolError('pedal did not activate the upload');
+      throw new ProtocolError("pedal did not activate the upload");
     }
     return after;
   }
@@ -169,7 +169,7 @@ export class PresetLink {
     await this.call(CMD.REVERT, [], this.revertTimeoutMs);
     const after = await this.afterReboot();
     if (!after) return null;
-    if (after.source !== 0) throw new ProtocolError('pedal did not revert');
+    if (after.source !== 0) throw new ProtocolError("pedal did not revert");
     return after;
   }
 

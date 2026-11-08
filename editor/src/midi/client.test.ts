@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'bun:test';
-import { PresetLink, RebootTimeoutError, type MidiTransport } from './client';
-import { CMD, HEADER, fnv1a32, getU14, getU21, getU32, u14, u21, u32 } from './protocol';
-import fixture from '../../../tests/fixtures/two_presets.toml' with { type: 'text' };
-import builtIn from '../../../presets.toml' with { type: 'text' };
+import { describe, expect, it } from "bun:test";
+import builtIn from "../../../presets.toml" with { type: "text" };
+import fixture from "../../../tests/fixtures/two_presets.toml" with { type: "text" };
+import { type MidiTransport, PresetLink, RebootTimeoutError } from "./client";
+import { CMD, fnv1a32, getU14, getU21, getU32, HEADER, u14, u21, u32 } from "./protocol";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -35,7 +35,7 @@ class FakePedal implements MidiTransport {
 
   async waitForReboot() {
     this.reboots++;
-    if (this.rebootTimesOut) throw new RebootTimeoutError('pedal did not come back after reboot');
+    if (this.rebootTimesOut) throw new RebootTimeoutError("pedal did not come back after reboot");
     if (this.staleAfterReboot) this.dropReplies = Infinity;
   }
 
@@ -43,7 +43,7 @@ class FakePedal implements MidiTransport {
     expect(msg[0]).toBe(0xf0);
     expect(msg[msg.length - 1]).toBe(0xf7);
     expect([...msg.slice(1, 4)]).toEqual([...HEADER]);
-    const cmd = msg[4];
+    const cmd = msg[4]!;
     const body = msg.slice(5, -1);
     const [status, reply] = this.handle(cmd, body);
     if (this.dropReplies > 0) {
@@ -51,13 +51,18 @@ class FakePedal implements MidiTransport {
       return;
     }
     const frame = Uint8Array.from([0xf0, ...HEADER, cmd | 0x40, status, ...reply, 0xf7]);
-    queueMicrotask(() => this.subscribers.forEach((cb) => cb(frame)));
+    queueMicrotask(() => {
+      for (const cb of this.subscribers) cb(frame);
+    });
   }
 
   private handle(cmd: number, body: Uint8Array): [number, number[]] {
     switch (cmd) {
       case CMD.INFO:
-        return [0, [1, ...u21(MAX_TEXT), ...u14(CHUNK), this.source, ...u21(this.text.length), ...u32(fnv1a32(this.text)), 2]];
+        return [
+          0,
+          [1, ...u21(MAX_TEXT), ...u14(CHUNK), this.source, ...u21(this.text.length), ...u32(fnv1a32(this.text)), 2],
+        ];
       case CMD.READ: {
         const index = getU14(body, 0);
         if (index * CHUNK >= this.text.length) return [3, []];
@@ -105,8 +110,8 @@ class FakePedal implements MidiTransport {
 
 const decode = (b: Uint8Array) => new TextDecoder().decode(b);
 
-describe('PresetLink', () => {
-  it('reads the active bank byte-exactly', async () => {
+describe("PresetLink", () => {
+  it("reads the active bank byte-exactly", async () => {
     const pedal = new FakePedal(fixture);
     const progress: number[] = [];
     const text = await new PresetLink(pedal).readAll((done) => progress.push(done));
@@ -114,7 +119,7 @@ describe('PresetLink', () => {
     expect(progress.at(-1)).toBe(enc(fixture).length);
   });
 
-  it('uploads in 240-byte chunks with consecutive seqs and verifies after the reboot', async () => {
+  it("uploads in 240-byte chunks with consecutive seqs and verifies after the reboot", async () => {
     const pedal = new FakePedal(builtIn);
     const info = await new PresetLink(pedal).upload(fixture);
     expect(decode(pedal.text)).toBe(fixture);
@@ -124,17 +129,17 @@ describe('PresetLink', () => {
     expect(pedal.reboots).toBe(1);
   });
 
-  it('reports a rejected bank with the pedal message and never waits for a reboot', async () => {
+  it("reports a rejected bank with the pedal message and never waits for a reboot", async () => {
     const pedal = new FakePedal(builtIn);
-    pedal.commitParseError = 'preset 0: blinks out of range 1..20';
+    pedal.commitParseError = "preset 0: blinks out of range 1..20";
     await expect(new PresetLink(pedal).upload(fixture)).rejects.toThrow(
-      'COMMIT: ParseError: preset 0: blinks out of range 1..20',
+      "COMMIT: ParseError: preset 0: blinks out of range 1..20",
     );
     expect(pedal.reboots).toBe(0);
     expect(decode(pedal.text)).toBe(builtIn);
   });
 
-  it('resends a DATA frame whose reply was lost without duplicating text', async () => {
+  it("resends a DATA frame whose reply was lost without duplicating text", async () => {
     const pedal = new FakePedal(builtIn);
     const link = new PresetLink(pedal, { replyTimeoutMs: 20 });
     const orig = pedal.send.bind(pedal);
@@ -147,20 +152,20 @@ describe('PresetLink', () => {
     expect(decode(pedal.text)).toBe(fixture);
   });
 
-  it('gives up after two lost INFO replies', async () => {
+  it("gives up after two lost INFO replies", async () => {
     const pedal = new FakePedal(builtIn);
     pedal.dropReplies = 2;
-    await expect(new PresetLink(pedal, { replyTimeoutMs: 20 }).info()).rejects.toThrow('INFO: no reply');
+    await expect(new PresetLink(pedal, { replyTimeoutMs: 20 }).info()).rejects.toThrow("INFO: no reply");
   });
 
-  it('reverts to the built-in bank', async () => {
+  it("reverts to the built-in bank", async () => {
     const pedal = new FakePedal(fixture);
     pedal.source = 1;
     const info = await new PresetLink(pedal).revert();
     expect(info?.source).toBe(0);
   });
 
-  it('resolves null when the pedal does not come back after the reboot', async () => {
+  it("resolves null when the pedal does not come back after the reboot", async () => {
     const pedal = new FakePedal(builtIn);
     pedal.rebootTimesOut = true;
     const link = new PresetLink(pedal);
@@ -169,7 +174,7 @@ describe('PresetLink', () => {
     expect(await link.revert()).toBeNull();
   });
 
-  it('resolves null when the rebooted pedal does not answer INFO', async () => {
+  it("resolves null when the rebooted pedal does not answer INFO", async () => {
     const pedal = new FakePedal(builtIn);
     pedal.staleAfterReboot = true;
     expect(await new PresetLink(pedal, { replyTimeoutMs: 20 }).upload(fixture)).toBeNull();
