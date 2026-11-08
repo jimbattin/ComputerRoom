@@ -19,6 +19,14 @@
 //   0x05 REVERT  erases the stored bank and reboots after Ok
 //   0x06 READ    index u14 -> index u14, activeLength u21, text[index*240 ..+240)
 //   0x07 ABORT   ends the session
+//   0x08 DFU     -> Ok; the pedal then restarts into the Daisy bootloader's DFU mode
+//                   (no timeout), ready for `make program-dfu`. Older firmware: BadFrame.
+//
+// Identity Request (Universal Non-Real-Time, any device id 00-7F): F0 7E <id> 06 01 F7
+// Identity Reply: F0 7E 7F 06 02 7D 43 53 00 00 00 00 00 00 <build id> F7
+//   manufacturer 7D, family 43 53 ("CS"), member 00 00 (Terrarium), version 00 00 00 00,
+//   build id: 1..32 printable ASCII bytes, the short git commit at build time with "+dirty"
+//   when tracked files differed, or "unknown" outside git (Makefile, build/build_id.c).
 //
 // Host side: stop-and-wait (one frame in flight); wait up to 10 s for the COMMIT
 // reply. After Ok to COMMIT or REVERT the USB port disappears for about 3 s while
@@ -33,13 +41,15 @@ constexpr uint8_t kProtocolVersion   = 1;
 
 enum class UploadStatus : uint8_t { Ok = 0, BadFrame, NoSession, BadSeq, BadLength,
                                     LengthMismatch, HashMismatch, ParseError, FlashError };
-enum class UploadAction { None, Commit, Revert };
+enum class UploadAction { None, Commit, Revert, Dfu };
 
 // Bytewise 32-bit FNV-1a.
 uint32_t Fnv1a32(const void* data, uint32_t length);
 
 // Bytes of one SysEx frame between F0 and F7, filled from the USB interrupt.
-// Single slot: bytes arriving while a frame is Ready() are dropped.
+// Latches only frames of ours (7D 43 53 ...) or an Identity Request (7E <id> 06 01);
+// any other complete frame is dropped at its F7. Single slot: bytes arriving while a
+// frame is Ready() are dropped.
 class SysExAssembler {
 public:
     static constexpr size_t kMaxFrame = 256;
@@ -80,9 +90,13 @@ public:
     static constexpr uint32_t kChunkBytes       = 240;
     static constexpr uint32_t kSessionTimeoutMs = 5000;
     static constexpr size_t   kMaxReply         = 256;  // whole reply incl. F0/F7
+    static constexpr size_t   kMaxBuildId       = 32;   // Identity Reply build id bytes
 
     // rxBuffer holds kMaxTextBytes; `active` describes the bank the pedal booted.
-    void Init(char* rxBuffer, BankValidator validate, const ActiveBank& active);
+    // `buildId` is the Identity Reply's build id and must outlive the protocol; null or
+    // empty is sent as "unknown".
+    void Init(char* rxBuffer, BankValidator validate, const ActiveBank& active,
+              const char* buildId);
     // frame = bytes between F0 and F7. Commit/Revert: the caller performs the flash
     // operation, then calls Finish() to build the reply.
     UploadAction Handle(const uint8_t* frame, size_t len, uint32_t nowMs);
@@ -108,6 +122,7 @@ private:
     char*         rx_       = nullptr;
     BankValidator validate_ = nullptr;
     ActiveBank    active_   = {};
+    const char*   buildId_  = nullptr;
     bool          session_  = false;
     uint32_t      expectedLength_ = 0;
     uint32_t      expectedHash_   = 0;

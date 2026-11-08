@@ -16,7 +16,8 @@ constexpr float kKnobMoveThreshold = 0.01f;
 constexpr float kKnobApplyEpsilon = 0.001f;
 
 // Positions this close to a rail are written as exactly 0.0 / 1.0. The top reading is
-// at most 65535/65536, and libdaisy documents ~0.002 of bleed at the bottom of the pots
+// at most 65535/65536 (full scale needs libdaisy >= v9.0.0; v8.x topped out at 31/32),
+// and libdaisy documents ~0.002 of bleed at the bottom of the pots
 // (libdaisy/src/hid/ctrl.cpp:3-4).
 constexpr float kKnobRailWindow = 0.003f;
 

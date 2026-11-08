@@ -192,6 +192,38 @@ remedy is to also pass audio through for 5 s after every INFO or READ.
 
 Pass: the whine is no louder on the revision under test.
 
+### H12. Knob full travel (libdaisy v9.0.0 and later)
+
+libdaisy v9.0.0 fixed the ADC oversampling scale: up to v8.1.0 every knob read 31/32 of its
+position, so full CW stopped at about 0.969 and never reached the top rail.
+
+1. On preset 1, turn KNOB_3 (`output.MainOut`) slowly from full CCW to full CW.
+   Pass: silent wet path at the CCW stop, the level rises smoothly with no step, and the last
+   few degrees into the CW stop still raise the level.
+2. Repeat for KNOB_6 (`late.LineDecay`). Pass: the longest decay is at the CW stop.
+3. With the knob at full CW, change presets and come back. Pass: the knob stays parked (no
+   jump) until it is turned.
+
+### H13. Identity Reply and DFU over USB-MIDI
+
+1. `$H identity`. Pass: `identity: manufacturer=7d family=43 53 member=00 00 version=00 00 00 00
+   build=<id>`, where `<id>` is the string in `build/build_id.c` (the short commit, `+dirty`
+   if tracked files differed).
+2. Burst DFU: find the card number N with `amidi -l`, then
+   ```bash
+   amidi -p hw:N,0,0 -S "F0 7D 70 01 06 F7 F0 7D 33 01 13 F7 F0 7D 43 53 08 F7"
+   dfu-util -l
+   ```
+   Pass: `0483:df11` is listed within about 1 s and stays listed (no timeout). `make
+   program-dfu` then flashes, and the pedal boots with its preset and bypass state restored.
+3. `$H dfu`. Pass: `DFU: Ok`, and the pedal enters DFU the same way. Reflash with
+   `make program-dfu`.
+4. Save a sound (FS 1 held 5 s), commit a change that touches only a `.md` file, and
+   `make program-dfu`. Pass: the saved sound is still on that preset after boot (the build id
+   is outside the firmware hash).
+5. With the browser editor open (`make editor`) and connected, run `$H identity`. Pass: the
+   editor keeps working.
+
 ## Results log
 
 Copy one row per validated revision.

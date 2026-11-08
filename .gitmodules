@@ -5,7 +5,7 @@
 [submodule "libdaisy"]
 	path = libdaisy
 	url = https://github.com/electro-smith/libdaisy
-	branch = v8.1.0
+	branch = v9.0.0
 [submodule "Terrarium"]
 	path = Terrarium
 	url = https://github.com/PedalPCB/Terrarium

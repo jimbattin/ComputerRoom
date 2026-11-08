@@ -11,6 +11,21 @@ export APP_TYPE = BOOT_SRAM
 CPP_SOURCES = src/cloudseed.cpp src/preset_bank.cpp src/pedal_leds.cpp src/sdram_pool.cpp \
               src/pedal_storage.cpp src/preset_protocol.cpp src/usb_midi_link.cpp
 C_SOURCES += third_party/tomlc99/toml.c
+# Build id for the MIDI Identity Reply (src/preset_protocol.h): the repo's short commit, +dirty when
+# tracked files differ, unknown outside git. build/build_id.c is rewritten only when the id changes, so
+# an unchanged tree relinks nothing. kBuildId is non-const with a fixed size: it lands in .data, outside
+# the _stext.._etext range firmwareImageHash() covers (src/pedal_storage.cpp), and a new id moves
+# nothing in that range, so a commit that changes no code keeps saved user presets and an uploaded bank.
+# BUILD_DIR is not defined until the core Makefile is included; it is "build" there.
+BUILD_ID_HEAD := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null)
+BUILD_ID := $(if $(BUILD_ID_HEAD),$(BUILD_ID_HEAD)$(if $(shell git -C $(CURDIR) status --porcelain --untracked-files=no 2>/dev/null),+dirty),unknown)
+BUILD_ID_C := build/build_id.c
+BUILD_ID_SRC := char kBuildId[33] = "$(BUILD_ID)";
+$(shell mkdir -p build)
+ifneq ($(BUILD_ID_SRC),$(shell cat $(BUILD_ID_C) 2>/dev/null))
+$(shell printf '%s\n' '$(BUILD_ID_SRC)' > $(BUILD_ID_C))
+endif
+C_SOURCES += $(BUILD_ID_C)
 ASM_SOURCES += src/presets_toml.s
 # Library Locations
 LIBDAISY_DIR = ./libdaisy

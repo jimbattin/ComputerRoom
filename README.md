@@ -63,7 +63,7 @@ You need:
 - A host C/C++ compiler (`gcc`/`g++` by default, or set `HOSTCC`/`HOSTCXX`): `make` builds a
   small host tool that validates presets.toml before it is embedded in the firmware
 
-libdaisy, DaisySP and Terrarium are git submodules, pinned to exact commits (libdaisy v8.1.0,
+libdaisy, DaisySP and Terrarium are git submodules, pinned to exact commits (libdaisy v9.0.0,
 DaisySP V1.0.0), and libdaisy has submodules of its own (CMSIS, the STM32 HAL). The build fails
 without them, so clone recursively:
 ```
