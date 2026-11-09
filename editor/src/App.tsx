@@ -23,8 +23,11 @@ interface Confirm {
 
 const pct = (done: number, total: number) => Math.floor((done * 100) / Math.max(total, 1));
 
-/** How often the CPU meter asks the pedal for its load; the pedal publishes once a second. */
-const LOAD_POLL_MS = 1000;
+/**
+ * How often the editor polls LOAD: the CPU meter (the pedal publishes its load once a second)
+ * and the preset the pedal is playing, so a footswitch change shows up promptly.
+ */
+const LOAD_POLL_MS = 250;
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -47,10 +50,13 @@ export function App() {
   const [cpuLoad, setCpuLoad] = useState<LoadReply | null>(null);
   const busyRef = useRef(false);
   busyRef.current = busy;
+  /** The pedal's current preset as last reported; a change means it was switched on the pedal. */
+  const pedalPresetRef = useRef<number | null>(null);
 
-  // CPU meter: poll LOAD while linked and idle. PresetLink queues requests, so a poll in
-  // flight when an operation starts only delays that operation's first request. Firmware
-  // without LOAD (BadFrame) or a lost reply leaves the meter dimmed.
+  // Poll LOAD while linked and idle, for the CPU meter and the pedal's current preset.
+  // PresetLink queues requests, so a poll in flight when an operation starts only delays that
+  // operation's first request. Firmware without LOAD (BadFrame) or a lost reply leaves the
+  // meter dimmed.
   useEffect(() => {
     setCpuLoad(null);
     if (!connected || !link) return;
@@ -82,6 +88,17 @@ export function App() {
     () => !!info && !!doc && fnv1a32(new TextEncoder().encode(docText(doc))) === info.activeHash,
     [doc, info],
   );
+
+  // Follow preset changes made on the pedal (footswitch), but only while the editor holds the
+  // pedal's bank: a different bank's preset N is not what the pedal plays. Selecting a preset in
+  // the editor does not change the pedal's report, so it is never undone by the next poll.
+  const pedalPreset = cpuLoad?.currentPreset ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to the pedal's report only
+  useEffect(() => {
+    if (pedalPreset === null || pedalPreset === pedalPresetRef.current) return;
+    pedalPresetRef.current = pedalPreset;
+    if (state.source === "pedal" || inSync) dispatch({ type: "select", preset: pedalPreset });
+  }, [pedalPreset]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -195,7 +212,10 @@ export function App() {
     const after = await from.info();
     setInfo(after);
     // Firmware from before INFO carried currentPreset leaves the first preset selected.
-    if (after.currentPreset !== null) dispatch({ type: "select", preset: after.currentPreset });
+    if (after.currentPreset !== null) {
+      pedalPresetRef.current = after.currentPreset;
+      dispatch({ type: "select", preset: after.currentPreset });
+    }
     setStatus(null);
   }
 

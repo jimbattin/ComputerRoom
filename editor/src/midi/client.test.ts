@@ -23,6 +23,8 @@ class FakePedal implements MidiTransport {
   buildId = "abc1234";
   /** LOAD reply fields: avg, max (per mille), overruns; null: firmware without LOAD. */
   load: number[] | null = [612, 1043, 3];
+  /** The preset LOAD reports as playing. */
+  currentPreset = 5;
   /** Frames that arrived while the previous one was still unanswered: the pedal drops them. */
   overlapped = 0;
   private answering = false;
@@ -143,7 +145,7 @@ class FakePedal implements MidiTransport {
         this.session = null;
         return [0, []];
       case CMD.LOAD:
-        return this.load ? [0, this.load.flatMap((v) => u14(v))] : [1, []];
+        return this.load ? [0, [...this.load.flatMap((v) => u14(v)), this.currentPreset]] : [1, []];
       default:
         return [1, []];
     }
@@ -244,7 +246,12 @@ describe("PresetLink", () => {
 
   it("decodes LOAD", async () => {
     const pedal = new FakePedal(builtIn);
-    expect(await new PresetLink(pedal).load()).toEqual({ avgPermille: 612, maxPermille: 1043, overruns: 3 });
+    expect(await new PresetLink(pedal).load()).toEqual({
+      avgPermille: 612,
+      maxPermille: 1043,
+      overruns: 3,
+      currentPreset: 5,
+    });
   });
 
   it("queues a LOAD poll behind a read in progress instead of overlapping it", async () => {

@@ -656,16 +656,18 @@ static void testDfu() {
 static void testLoad() {
     Fixture fx;
     CHECK(fx.send(frame(0x09)) == UploadAction::None);
-    CHECK(fx.replyCmd() == 0x49 && fx.status() == 0 && fx.proto.ReplyLength() == 13);
+    CHECK(fx.replyCmd() == 0x49 && fx.status() == 0 && fx.proto.ReplyLength() == 14);
     const uint8_t* r = fx.proto.Reply();
-    CHECK(readU14(r + 6) == 0 && readU14(r + 8) == 0 && readU14(r + 10) == 0);
+    CHECK(readU14(r + 6) == 0 && readU14(r + 8) == 0 && readU14(r + 10) == 0 && r[12] == 0);
 
     fx.proto.SetLoad(CpuLoad{612, 1043, 3});
+    fx.proto.SetCurrentPreset(4);
     const std::string text = makeText(500);
     fx.begin(500, Fnv1a32(text.data(), 500), 0);
     fx.send(frame(0x09), 4000);
     r = fx.proto.Reply();
     CHECK(readU14(r + 6) == 612 && readU14(r + 8) == 1043 && readU14(r + 10) == 3);
+    CHECK(r[12] == 4);  // currentPreset
     fx.proto.Tick(5000);
     CHECK(!fx.proto.SessionActive());  // the session timer was not refreshed
 

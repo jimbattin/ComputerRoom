@@ -94,7 +94,7 @@ export function decodeInfo(b: Uint8Array): InfoReply {
   };
 }
 
-/** LOAD (0x09): the pedal's audio callback load over the last second. */
+/** LOAD (0x09): the pedal's audio callback load over the last second, and its current preset. */
 export interface LoadReply {
   /** Mean block time, per mille of the 1 ms block period. */
   avgPermille: number;
@@ -102,13 +102,15 @@ export interface LoadReply {
   maxPermille: number;
   /** Blocks that took longer than the block period (audio dropouts). */
   overruns: number;
+  /** 0-based index of the preset the pedal is playing. */
+  currentPreset: number;
 }
 
-const LOAD_BYTES = 6;
+const LOAD_BYTES = 7;
 
 export function decodeLoad(b: Uint8Array): LoadReply {
   if (b.length < LOAD_BYTES) throw new ProtocolError(`LOAD: ${b.length}-byte reply, expected ${LOAD_BYTES}`);
-  return { avgPermille: getU14(b, 0), maxPermille: getU14(b, 2), overruns: getU14(b, 4) };
+  return { avgPermille: getU14(b, 0), maxPermille: getU14(b, 2), overruns: getU14(b, 4), currentPreset: b[6]! };
 }
 
 export class ProtocolError extends Error {

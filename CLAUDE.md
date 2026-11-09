@@ -675,9 +675,11 @@ runs CONNECT and then READ by itself (`App.tsx` mount effect; INFO must answer, 
 other firmware is not linked). Both that auto read and READ go through `readPedal()` in `App.tsx`,
 which loads the bank and then selects INFO's `currentPreset` (`decodeInfo()` returns
 `currentPreset: number | null`), so the editor opens on the patch the pedal is playing.
-While linked and idle it polls `0x09 LOAD` once a second
-(`PresetLink.load()`; `PresetLink` queues requests, so a poll never overlaps another request) for
-the CPU meter (`components/CpuMeter.tsx`) at the right of the header's small LED. CONNECT sends the
+While linked and idle it polls `0x09 LOAD` every 250 ms (`LOAD_POLL_MS`, `PresetLink.load()`;
+`PresetLink` queues requests, so a poll never overlaps another request) for the CPU meter
+(`components/CpuMeter.tsx`) at the right of the header's small LED, and for LOAD's trailing
+`currentPreset`: when it changes (a footswitch preset change) the editor selects that preset,
+but only while it holds the pedal's bank (`source === "pedal"` or SYNC). CONNECT sends the
 Identity Request and reads the board from the member byte (no reply = terrarium, older
 firmware). A board key next to PROJECT picks the built-in bank, locked to the pedal's board
 while connected. UPLOAD refuses a bank whose `board` differs from the linked pedal's, using
@@ -1045,6 +1047,14 @@ but misses its fixes (v6.3+ carries libdaisy's QSPI write-protect fix), so re-ru
 libdaisy bump that ships a new one. A `BOOT_SRAM` build cannot be flashed with `make program`
 (openocd) - libdaisy errors out on that path (`libdaisy/core/Makefile:340-341`). Same procedure
 as README.md "Getting started".
+
+Without buttons: a pedal running this firmware restarts into DFU on `python3
+tools/usb_preset_host.py dfu` (SysEx `0x08`); then run `make [BOARD=hothouse] program-dfu`.
+Nothing else may hold the pedal's MIDI port at the time: Chrome's Web MIDI (an open editor tab)
+subscribes to it through ALSA seq clients "Chrome (input)/(output)" (`/proc/asound/seq/clients`),
+and the host tool then gets no reply. If the USB product string came back garbled after a
+reboot (`/proc/asound/cards` shows `USB-Audio - Љ`), name the port: `--dev /dev/snd/midiC<card>D0`.
+A Seed running other firmware needs BOOT/RESET (or that firmware's own DFU command).
 
 ### Compiler Configuration
 
@@ -1969,7 +1979,8 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
   firmware image is flashed; audio passes through dry for the duration of a session
 - CPU meter: `audioCallback()` times each block into `gCpuLoad`; SysEx `0x09 LOAD` (`tools/usb_preset_host.py
   load`, the editor's header meter) reports the last second's average / peak load and overruns
-  (about 77 % / 88 %, 0 overruns on the HotHouse running Chorus)
+  (about 77 % / 88 %, 0 overruns on the HotHouse running Chorus) plus the preset playing,
+  which the editor follows
 
 ### Quick Modifications
 1. Control mapping → `[preset.knob_map]` / `[preset.toggle_map]` in `presets.toml` /

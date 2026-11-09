@@ -276,18 +276,19 @@ that are neither its own nor an Identity Request, so they cannot block its own.
 
 The audio callback's load over the last complete second (`src/cpu_load.h`): the mean and the
 longest block time, in per mille of the 1 ms block period (1000 = the whole period), and how
-many blocks took longer than the period (each one an audio dropout). The pedal publishes a new
-window once a second; polling faster returns the same values. Not a session message: it neither
-needs nor refreshes a session.
+many blocks took longer than the period (each one an audio dropout); then `currentPreset`, the
+0-based index of the preset playing (as in INFO), so a host that polls LOAD sees preset changes
+made with the footswitch. The pedal publishes a new load window once a second; `currentPreset`
+is current on every reply. Not a session message: it neither needs nor refreshes a session.
 
 ```
 host:  F0 7D 43 53 09 F7
-pedal: F0 7D 43 53 49 00 <avg u14> <max u14> <overruns u14> F7
+pedal: F0 7D 43 53 49 00 <avg u14> <max u14> <overruns u14> <currentPreset> F7
 ```
 
-Status: `Ok`; all three fields are 0 before the first second completes. Firmware older than
-this command answers `BadFrame`. The editor polls it once a second for its CPU meter, and
-`tools/usb_preset_host.py load` prints it.
+Status: `Ok`; the three load fields are 0 before the first second completes. Firmware older
+than this command answers `BadFrame`. The editor polls it every 250 ms for its CPU meter and to
+follow the pedal's preset, and `tools/usb_preset_host.py load` prints it.
 
 ### Identity Request
 

@@ -199,7 +199,8 @@ def main():
         st, b = link.call(0x09)
         if st != 0:
             sys.exit(f"LOAD: {STATUS[st]}")
-        print(f"LOAD: avg {g14(b) / 10:.1f}% max {g14(b[2:]) / 10:.1f}% overruns {g14(b[4:])}")
+        print(f"LOAD: avg {g14(b) / 10:.1f}% max {g14(b[2:]) / 10:.1f}% overruns {g14(b[4:])} "
+              f"currentPreset {b[6]}")
     else:
         sys.exit(__doc__)
 

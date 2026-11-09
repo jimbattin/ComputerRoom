@@ -278,6 +278,9 @@ HotHouse build, audio playing, not bypassed.
    one-second window) and no `XRUN`.
 3. Preset 9, "Through the Looking Glass", toggle 1 Up (`max_delay_lines`), 30 s. Pass: `$H load`
    reports `overruns 0` every time and the editor's meter never shows `XRUN`.
+4. Editor connected on the pedal's bank: tap FS2 a few times, a few seconds apart. Pass: the
+   editor's main display follows each change to the next preset within about a second, and
+   `$H load` prints the same `currentPreset` (0-based) as the editor shows (1-based).
 
 ## Results log
 

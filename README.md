@@ -105,6 +105,10 @@ make program-boot
 make program-dfu                 # Terrarium
 make BOARD=hothouse program-dfu  # HotHouse
 ```
+A pedal already running this firmware can be put into DFU mode over USB instead of with the
+buttons: `python3 tools/usb_preset_host.py dfu`, then `make program-dfu` (or `make
+BOARD=hothouse program-dfu`). Close any browser tab using Web MIDI first (the editor holds the
+pedal's MIDI port while it is open). A Seed running other firmware needs BOOT/RESET.
 
 ## Editing presets
 
@@ -138,7 +142,7 @@ Preset order is stored in flash: append new `[[preset]]` entries at the end, and
 ## Uploading presets over USB
 
 With the pedal connected over USB, a host program such as a web page using Web MIDI can:
-- upload a complete presets.toml;
+- upload a complete preset bank (presets.toml, or presets_hothouse.toml for a HotHouse);
 - read back the bank that is active;
 - revert to the bank built into the firmware.
 
@@ -151,8 +155,8 @@ driver is needed.
   is sent back.
 - During an upload the reverb is switched off and the dry signal passes through.
 - A successful upload or revert reboots the pedal. The USB port disappears for about 3 s.
-- The uploaded bank replaces the built-in presets.toml until you revert, or until different
-  firmware is flashed.
+- The uploaded bank replaces the built-in bank until you revert, or until different firmware
+  is flashed.
 - Every change of the active bank discards the presets saved on the pedal (FS 1 held 5 s).
 
 The protocol is documented for host authors in [docs/USB_MIDI.md](docs/USB_MIDI.md). To test a
@@ -178,8 +182,9 @@ make serve           # bun install when package.json/bun.lock changed, then the 
 ```
 Open http://localhost:5174 in Chrome or Firefox with the pedal plugged in over USB. Use
 `localhost`, not a LAN address: Web MIDI SysEx only works in a secure context, and the server
-exits if its port is already in use. Here **PROJECT** reads the repo's presets.toml as it is on
-disk.
+exits if its port is already in use. Here **PROJECT** reads the repo's presets.toml or
+presets_hothouse.toml as it is on disk. Only one program can use the pedal's MIDI port at a
+time: close the editor tab before using `tools/usb_preset_host.py`, and vice versa.
 
 Or build the whole editor into one stand-alone file, from the repo root:
 ```
@@ -218,6 +223,9 @@ Using it:
   key (missing or unknown is checked as terrarium). When the page opens, the editor connects on
   its own and READs the pedal's active bank; with no pedal (or other firmware on the Daisy) it
   starts empty and shows why. Browsers ask for MIDI permission on that first connection.
+  While linked, a preset change made on the pedal (FS2) selects that preset in the editor
+  within a quarter second, as long as the editor holds the pedal's bank (read from it, or
+  identical to it); choosing a preset in the editor does not change the pedal.
 - Program keys 01-16 select a preset. **DUP** appends a copy at the end, and **DEL** removes
   one; there is no reordering. The page keys show faders with the engine's real units, the
   knob and toggle maps, and the name, LED and delay-line settings. On the KNOBS and SWITCH

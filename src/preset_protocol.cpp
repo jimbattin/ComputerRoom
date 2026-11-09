@@ -285,6 +285,7 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         putU14(load_.avgPermille);
         putU14(load_.maxPermille);
         putU14(load_.overruns);
+        put(static_cast<uint8_t>(currentPreset_ & 0x7F));
         endReply();
         return UploadAction::None;
 

@@ -23,10 +23,12 @@
 //   0x07 ABORT   ends the session
 //   0x08 DFU     -> Ok; the pedal then restarts into the Daisy bootloader's DFU mode
 //                   (no timeout), ready for `make program-dfu`. Older firmware: BadFrame.
-//   0x09 LOAD    -> avg u14, max u14, overruns u14: the audio callback's load over the
-//                   last second (cpu_load.h): mean and longest block in per mille of the
-//                   1 ms block period, and how many blocks overran it. Not a session
-//                   message. Older firmware: BadFrame.
+//   0x09 LOAD    -> avg u14, max u14, overruns u14, currentPreset: the audio callback's
+//                   load over the last second (cpu_load.h): mean and longest block in per
+//                   mille of the 1 ms block period, and how many blocks overran it; then the
+//                   0-based index of the preset playing, so a host polling LOAD follows
+//                   preset changes made on the pedal. Not a session message. Older
+//                   firmware: BadFrame.
 //
 // Identity Request (Universal Non-Real-Time, any device id 00-7F): F0 7E <id> 06 01 F7
 // Identity Reply: F0 7E 7F 06 02 7D 43 53 <member> 00 00 00 00 00 <build id> F7
