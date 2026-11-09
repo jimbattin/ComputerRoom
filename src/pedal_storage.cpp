@@ -14,12 +14,12 @@ constexpr uint32_t USER_PRESETS_QSPI_OFFSET = 0x1000;
 
 extern "C" {
     // Linker symbols bounding .text + .rodata (libdaisy/core/STM32H750IB_sram.lds:36,47),
-    // which include the embedded presets.toml. Used as the firmware identity.
+    // which include the embedded preset bank. Used as the firmware identity.
     extern const uint32_t _stext[];
     extern const uint32_t _etext[];
 }
 
-// FNV-1a over the loaded code + read-only data. Any change to code or presets.toml
+// FNV-1a over the loaded code + read-only data. Any change to code or the embedded bank
 // changes it, so saved edits never outlive the firmware that wrote them.
 static uint32_t firmwareImageHash() {
     uint32_t h = 2166136261u;

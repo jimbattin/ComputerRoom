@@ -27,14 +27,18 @@ uint32_t getU32(const uint8_t* p) {
     return getU21(p) | (uint32_t)p[3] << 21 | (uint32_t)(p[4] & 0x0F) << 28;
 }
 
-// Frames Handle() can answer: our header (7D 43 53 <cmd> ...) or a Universal
-// Non-Real-Time Identity Request (7E <id> 06 01). Hosts may send several devices'
-// frames back to back in one USB transfer; queueing only these keeps foreign frames
-// from taking queue space.
-bool latchable(const uint8_t* f, size_t n) {
-    return (n >= kHeaderLen && f[0] == kSysExManufacturer && f[1] == kSysExTag0 && f[2] == kSysExTag1)
-           || (n == 4 && f[0] == 0x7E && f[2] == 0x06 && f[3] == 0x01);
+// Frame classes (bytes between F0 and F7): our header 7D 43 53 <cmd> ..., and a
+// Universal Non-Real-Time Identity Request 7E <id> 06 01.
+bool isOurs(const uint8_t* f, size_t n) {
+    return n >= kHeaderLen && f[0] == kSysExManufacturer && f[1] == kSysExTag0 && f[2] == kSysExTag1;
 }
+bool isIdentityRequest(const uint8_t* f, size_t n) {
+    return n == 4 && f[0] == 0x7E && f[2] == 0x06 && f[3] == 0x01;
+}
+
+// Frames Handle() can answer. Hosts may send several devices' frames back to back in
+// one USB transfer; queueing only these keeps foreign frames from taking queue space.
+bool latchable(const uint8_t* f, size_t n) { return isOurs(f, n) || isIdentityRequest(f, n); }
 
 }  // namespace
 
@@ -162,7 +166,7 @@ void PresetProtocol::endReply() { put(0xF7); }
 
 UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t nowMs) {
     replyLen_ = 0;
-    if (len == 4 && frame[0] == 0x7E && frame[2] == 0x06 && frame[3] == 0x01) {
+    if (isIdentityRequest(frame, len)) {
         // Identity Reply. Not a session message: the session timer is untouched.
         static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, kSysExManufacturer,
                                         kSysExTag0, kSysExTag1};
@@ -177,8 +181,7 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         endReply();
         return UploadAction::None;
     }
-    if (len < kHeaderLen || frame[0] != kSysExManufacturer || frame[1] != kSysExTag0 ||
-        frame[2] != kSysExTag1)
+    if (!isOurs(frame, len))
         return UploadAction::None;  // not ours: no reply
 
     const uint8_t  cmd  = frame[3];

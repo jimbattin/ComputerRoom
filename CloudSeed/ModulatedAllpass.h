@@ -11,10 +11,9 @@ namespace CloudSeed
 {
 	class ModulatedAllpass
 	{
-	public:
+	private:
 		static const int ModulationUpdateRate = 8;
 
-	private:
 		float* delayBuffer;
 		float* output;
 		int bufferSize;

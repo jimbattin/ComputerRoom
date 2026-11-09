@@ -5,7 +5,7 @@
 
 namespace AudioLib
 {
-	// octave response. value float every step (3 or 4 steps)
+	// octave response: the value doubles every step (3 or 4 octaves)
 	float DSY_SDRAM_BSS ValueTables::Response3Oct[TableSize];
 	float DSY_SDRAM_BSS ValueTables::Response4Oct[TableSize];
 

@@ -13,7 +13,7 @@ namespace AudioLib
 		static const int TableSize = 4001;
 
 
-		// octave response. value float every step (3 or 4 steps)
+		// octave response: the value doubles every step (3 or 4 octaves)
 		static DSY_SDRAM_BSS float Response3Oct[TableSize];
 		static DSY_SDRAM_BSS float Response4Oct[TableSize];
 

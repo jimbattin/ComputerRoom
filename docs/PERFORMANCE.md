@@ -12,8 +12,8 @@ several of the code paths §1-§10 describe.
 **Files**: `src/cloudseed.cpp`
 
 Reverb feedback paths decay exponentially toward zero every tail: `DelayLine::Process`'s
-feedback multiply (`CloudSeed/DelayLine.h:199`), `ModulatedAllpass::Process*`'s feedback
-(`CloudSeed/ModulatedAllpass.h:90,128`), and `Biquad::Process`'s IIR state
+feedback multiply (`CloudSeed/DelayLine.h:198`), `ModulatedAllpass::Process*`'s feedback
+(`CloudSeed/ModulatedAllpass.h:89,127`), and `Biquad::Process`'s IIR state
 (`CloudSeed/AudioLib/Biquad.h:57-61`). Once a value enters the subnormal range (~1e-38),
 the Cortex-M7 FPU takes a multi-cycle microcoded slow path per operation instead of
 single-cycle. The codebase already had three ad-hoc guards (`ReverbChannel.h:373-380`,
@@ -81,7 +81,7 @@ if (idx >= len) idx -= len;
 
 ## 5. Fix double-precision `fmod` literal promotion
 
-**Files**: `CloudSeed/ModulatedDelay.h:94`, `CloudSeed/ModulatedAllpass.h:151`
+**Files**: `CloudSeed/ModulatedDelay.h:96`, `CloudSeed/ModulatedAllpass.h:150`
 
 Both did `modPhase = std::fmod(modPhase, 1.0);` where `modPhase` is a `float` member. The
 `1.0` literal is a `double`, forcing the `double` overload of `fmod` (promote, call,
@@ -206,7 +206,7 @@ heap-allocated and each `DelayLine` is placement-new'd into the SDRAM pool, whos
 so those reads returned whatever the memory held:
 - `SetParameter(DiffusionEnabled)` and `SetParameter(LateDiffusionEnabled)` compare the new
   value with the old `diffuserEnabled` / `DelayLine::DiffuserEnabled` to decide whether to clear
-  the diffuser (`CloudSeed/ReverbChannel.h:196`, `:233`); the preset load's first write compared
+  the diffuser (`CloudSeed/ReverbChannel.h:143`, `:182`); the preset load's first write compared
   against garbage.
 - `AllpassDiffuser`'s constructor called `Update()`, which reads `delay`, and
   `SetSamplerate()` → `SetModRate(modRate)` before either was set. Built over memory filled
@@ -215,10 +215,12 @@ so those reads returned whatever the memory held:
   preset load.
 
 **Fix**: the constructors give these members a defined starting value:
-`CloudSeed/ReverbChannel.h:85-91`, `CloudSeed/DelayLine.h:44-51`, and
-`CloudSeed/AllpassDiffuser.h:36-39` (`delay = 100`, `modRate = 0`, matching the stage
-defaults `ModulatedAllpass` is built with). The line-seed series that `UpdateLines()` reads
-before `DelaySeed` is applied is zero-initialised by `SeedSeries` (§9).
+`CloudSeed/ReverbChannel.h:64-73`, `CloudSeed/DelayLine.h:40-47`, and
+`CloudSeed/AllpassDiffuser.h:35-37` (`delay = 100`, matching the stage default
+`ModulatedAllpass` is built with). The `modRate` member and the constructor's
+`SetModRate()` call were later removed (§13): the stages already start
+at `ModRate = 0`. The line-seed series that `UpdateLines()` reads before `DelaySeed` is applied
+is zero-initialised by `SeedSeries` (§9).
 
 **Result**: the preset load still overwrites every one of these before audio starts, so the
 sound is unchanged; the same `0xBE` check now yields `SampleDelay` 85 and 47, `ModRate` 0 at
@@ -299,14 +301,14 @@ pre-audit -> final only. Both are finite, with |RMS delta| < 0.0001 dB and |peak
    - Removed `ModulatedAllpass::Get`, `ReverbChannel::GetLineOutput` + `lineOutBuffer`
      (written every block, never read), the `ChannelLR` / `crossSeed` stereo remnants (always
      Left / 0), the self-includes, and `using namespace` in headers.
-   - The `CrossSeed` case keeps its `UpdateLines()` call (`CloudSeed/ReverbChannel.h:261-269`).
+   - The `CrossSeed` case keeps its `UpdateLines()` call (`CloudSeed/ReverbChannel.h:244-252`).
      The audit plan assumed it recomputed unchanged values, but it does not: the line
      diffusers' mod amount and rate are scaled by their seeds, which `PostDiffusionSeed`
      changes without re-applying them. `LoadPreset()` writes `CrossSeed` after
      `PostDiffusionSeed`, so this call is what applies them; removing it changed eight of the
      ten presets.
 2. **Buffer wiring** (byte-identical):
-   - `ModulatedAllpass` takes its ring length from `AllpassDiffuser` (`CloudSeed/AllpassDiffuser.h:28-35`):
+   - `ModulatedAllpass` takes its ring length from `AllpassDiffuser` (`CloudSeed/AllpassDiffuser.h:27-34`):
      `2 * (MaxDelayMs * samplerate / 1000) + 2` = 9602 samples. Before, the ring was 19200 and
      the 150 ms size, 7200, was passed as the *output block* length, where 48 are used.
    - `MultitapDiffuser::output` is one block (48), not 48000.
@@ -320,7 +322,7 @@ pre-audit -> final only. Both are finite, with |RMS delta| < 0.0001 dB and |peak
      zeroed the whole ring. For a late-diffusion flip that was about 1 MB of SDRAM writes.
    - `ClearBuffers()` now sets a `written` count to 0. Until the ring has been rewritten (~200 ms),
      `Process()` runs an out-of-line `ProcessFresh()` that reads every slot not yet written as
-     0 (`CloudSeed/ModulatedAllpass.h:74-141`).
+     0 (`CloudSeed/ModulatedAllpass.h:73-140`).
    - `tests/allpass_clear_test.cpp` checks this against an allpass with a truly zeroed ring.
      With modulation off, on with interpolation, and on without, it matches sample for
      sample. The test fails if stale samples are replayed.
@@ -459,6 +461,49 @@ stream from SDRAM); 1 line, 1 tap and no early diffusion 6.0 %.
 Verification: `make test` (now with `allpass_clear_test`), `make` and `make BOARD=hothouse`
 link with no warnings from `src/` or `CloudSeed/`, and `make presets-check` passes. On the
 pedal: the tables above, and docs/HARDWARE_TESTS.md H18.
+
+## 13. Dead-code sweep (2026-11)
+
+**Files**: `CloudSeed/` (`ReverbChannel.h`, `ReverbController.h`, `AllpassDiffuser.h`,
+`DelayLine.h`, `ModulatedAllpass.h`, `ModulatedDelay.h`, `ReverseDelay.h`, `Utils.h`,
+`FastSin.cpp`, `AudioLib/ValueTables.*`, `Makefile`), `src/` (`preset_bank.*`,
+`preset_protocol.cpp`, `knob_bank.h`, `footswitch_gestures.h`, `cloudseed.cpp`,
+`pedal_storage.*`, `sdram_pool.cpp`), `tests/preset_bank_test.cpp`,
+`tests/preset_protocol_test.cpp`
+
+**Bug fixed**: `CloudSeed/Makefile` generated its dependency files with
+`-MT"$(@:%.o=%.d)"`, so each `.d` named itself instead of the object as the target, and a
+header edit (e.g. `MultitapDiffuser.h`) did not rebuild the library objects that include it.
+The app, which includes the same headers, could then disagree with `libcloudseed.a` about an
+object's layout. The `-MT` is gone; `.d` files now name the `.o`.
+
+**Removed** (each verified unused by a repo-wide search):
+- Engine: `ReverbChannel::bufferSize`, `postDiffusionSeed` and `UpdatePostDiffusion()` (the
+  `PostDiffusionSeed` case seeds the lines itself), the `tempBuffer` clear in `ClearBuffers()`
+  (`Process()` writes it before reading), the constructor's redundant
+  `SetInterpolationEnabled(true)`; `AllpassDiffuser::modRate` and its constructor
+  `SetModRate()` call; the `Biquad::Slope = 1` writes in `DelayLine` (the constructor's
+  default); two `ReverseDelay` clamps that cannot fire (`Xf > W/2`, `hop < 1`); an unreachable
+  `return` in `GetScaledParameter()`; unused includes; the library Makefile's C/assembler
+  rules, tools and `C_DEFS`. `ModulatedAllpass::ModulationUpdateRate` is now private
+- Firmware: `PresetBank::board` and `PresetData::name` (written by the parser, read only by
+  tests; `gPresets` and `gUploadCheck` shrink from 5,000 to 4,484 B each), an unreachable
+  `!primed` test and a duplicated park sequence in `KnobBank` (now `park()`), a duplicated
+  Identity Request / header test in `PresetProtocol`, a redundant COMMIT FlashError check
+  in `preset_protocol_test` (`testFlashFailures()` covers it), unused includes in
+  `sdram_pool.cpp`. Every control write in `src/cloudseed.cpp` (including the filter
+  auto-enable and the HotHouse `early.envelope` target) now goes through `setParameter()`
+
+**Identified, not changed**: `ModulatedAllpass::Update()` permanently shrinks the public
+`ModAmount` once it reaches `SampleDelay`, so turning the diffusion delay down and back up
+leaves the modulation reduced until `ModAmount` is written again (upstream behaviour; fixing
+it changes the sound). The `Interpolation` parameter reaches only the late-line diffusers.
+
+**Verification**: a throwaway host harness rendered six random presets (3,000 blocks each,
+random parameter writes, a mid-run `ClearBuffers()`, the reverse voice) through the engine
+at `HEAD` and after the sweep, with the SDRAM-pool stand-in filled with `0xAB`: the FNV-1a of
+every output sample is identical (`d46b8b252f5c77d0`). `make test`, `make presets-check`,
+`make` and `make BOARD=hothouse` pass.
 
 ## Verification performed
 

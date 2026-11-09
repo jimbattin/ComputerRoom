@@ -1,4 +1,5 @@
-// Parses the embedded presets.toml document into a PresetBank.
+// Parses a preset bank (the embedded presets.toml / presets_hothouse.toml, or a bank
+// uploaded over USB-MIDI) into a PresetBank.
 //
 // Depends only on CloudSeed/Parameter.h, CloudSeed/ParameterNames.h,
 // CloudSeed/DelayLineCount.h, tomlc99 and libc, so the exact same code runs on the
@@ -760,10 +761,8 @@ bool parsePreset(const toml_table_t* preset, Board board, int index, PresetData&
         return false;
     }
 
-    // Measure and copy before freeing the parser's string, then validate.
+    // The name is validated but not stored: nothing on the pedal displays it.
     const size_t nameLen = strlen(name.u.s);
-    if (nameLen < (size_t)kMaxPresetNameLen)
-        memcpy(out.name, name.u.s, nameLen + 1);
     dealloc(name.u.s);
 
     if (nameLen == 0)
@@ -932,7 +931,6 @@ bool ParsePresetBank(char* toml, Board board, PresetBank& bank, char* err, int e
                      void* (*alloc)(size_t), void (*dealloc)(void*))
 {
     bank.count = 0;
-    bank.board = board;
     if (errLen > 0)
         err[0] = '\0';
 
@@ -951,10 +949,6 @@ bool ParsePresetBank(char* toml, Board board, PresetBank& bank, char* err, int e
 
     const bool ok = parseRoot(root, board, bank, err, errLen, dealloc);
     toml_free(root);
-
-    if (!ok)
-        bank.count = 0;
-
     return ok;
 }
 

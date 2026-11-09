@@ -19,7 +19,6 @@ namespace CloudSeed
 
 		ModulatedAllpass* filters[MaxStageCount];  // filled once, in the constructor
 		int delay;
-		float modRate;
 		AudioLib::SeedSeries<MaxStageCount * 3> seeds;  // delay, mod amount, mod rate per stage
 		
 	public:
@@ -33,16 +32,14 @@ namespace CloudSeed
 			for (int i = 0; i < MaxStageCount; i++)
 				filters[i] = new ModulatedAllpass(bufferSize, ring, 100);
 
-			// Update() and SetModRate() read these before any preset sets them:
-			// start from the filters' own defaults (100-sample delay, no modulation).
+			// Update() reads delay before any preset sets it: start from the filters'
+			// own 100-sample delay. Their modulation starts off (ModRate 0).
 			delay = 100;
-			modRate = 0.0f;
 			seeds.SetSeed(23456);
 			Update();
 			Stages = 1;
 
 			this->samplerate = samplerate;
-			SetModRate(modRate);
 		}
 
 		~AllpassDiffuser()
@@ -105,8 +102,6 @@ namespace CloudSeed
 
 		void SetModRate(float rate)
 		{
-			modRate = rate;
-
 			for (int i = 0; i < MaxStageCount; i++)
 				filters[i]->ModRate = rate * (0.85f + 0.3f * seeds[MaxStageCount * 2 + i]) / samplerate;
 		}

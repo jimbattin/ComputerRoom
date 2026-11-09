@@ -5,6 +5,7 @@
 #include "ModulatedDelay.h"
 #include "AllpassDiffuser.h"
 #include "AudioLib/Biquad.h"
+#include "Utils.h"
 
 namespace CloudSeed
 {
@@ -49,11 +50,9 @@ namespace CloudSeed
 			mixedBuffer = new float[bufferSize];
 			filterOutputBuffer = new float[bufferSize];
 
-			lowShelf.Slope = 1.0f;
 			lowShelf.SetGainDb(-20);
 			lowShelf.Frequency = 20;
 
-			highShelf.Slope = 1.0f;
 			highShelf.SetGainDb(-20);
 			highShelf.Frequency = 19000;
 

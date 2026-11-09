@@ -1,6 +1,8 @@
 #ifndef MODULATEDDELAY
 #define MODULATEDDELAY
 
+#include <cstddef>
+#include <new>
 #include "Utils.h"
 #include "FastSin.h"
 

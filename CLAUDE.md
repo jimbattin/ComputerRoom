@@ -253,7 +253,7 @@ goes live once it moves `kKnobMoveThreshold` (0.01 of travel) from its snapshot.
 moving) position over `kKnobGlideBlocks` (50) audio blocks = 50 ms, landing exactly on the pot.
 The glide exists because engine parameters are not smoothed downstream
 (`ReverbChannel::SetParameter` assigns the output levels directly,
-`CloudSeed/ReverbChannel.h:271-282`), so a step would click. After the glide the knob writes its
+`CloudSeed/ReverbChannel.h:254-265`), so a step would click. After the glide the knob writes its
 own position whenever that changes by `kKnobApplyEpsilon` (0.001), which keeps ADC noise off the
 engine.
 
@@ -367,10 +367,10 @@ Looking Glass" (`max_delay_lines = 4.0`) - it is CPU-intensive and crackles abov
 
 **Preset System Architecture**:
 - Every bank starts with a root key `board = "terrarium"` or `board = "hothouse"`, checked first
-  (`checkBoard()`, `src/preset_bank.cpp:823-852`) against the board the parser is run for
+  (`checkBoard()`, `src/preset_bank.cpp:822-851`) against the board the parser is run for
   (`kBoard` on the pedal, `--board` in `preset_check`): `missing board = "<thisboard>"`,
   `board '<x>' is not "terrarium" or "hothouse"`, or `bank is for board "<file>", this pedal is
-  "<this>"`. The board is stored in `PresetBank::board`
+  "<this>"`. The board is not stored: a parsed bank is always for the board it was checked against
 - Each `[[preset]]` carries `name`, `blinks`, `led_on_ms`, `led_off_ms`, `led_pause_ms`,
   `default_delay_lines`, `max_delay_lines`, a `[preset.knob_map]` table, a `[preset.toggle_map]`
   table, eight `[preset.params.*]` groups holding all 49 file-controlled parameters (see the
@@ -407,10 +407,11 @@ Looking Glass" (`max_delay_lines = 4.0`) - it is CPU-intensive and crackles abov
   [src/preset_bank.cpp](src/preset_bank.cpp)), and `default_delay_lines` must not exceed
   `max_delay_lines` - the toggle's off state must never exceed a preset's CPU cap
 - Parsed by `ParsePresetBank()` ([src/preset_bank.cpp](src/preset_bank.cpp)) into `PresetBank`
-  (`board` + `count` + `PresetData[16]`); `PresetData::params[]` is indexed by `(int)Parameter`.
+  (`count` + `PresetData[16]`); `PresetData::params[]` is indexed by `(int)Parameter`. The
+  preset `name` is validated but not stored: nothing on the pedal displays it.
   `ParsePresetBank()`, `ParsePresetBankText()` and `ParsePresetText()` all take the `Board`
 - Applied with `CloudSeed::ReverbController::LoadPreset()`
-  (`CloudSeed/ReverbController.h:34`), which copies every slot except `LineCount`
+  (`CloudSeed/ReverbController.h:35`), which copies every slot except `LineCount`
   and then re-applies all 50 through `SetParameter`
 - Cycles using modulo operator: `(currentPreset + 1) % gPresets.count` (`src/cloudseed.cpp:848`)
 - Preset index is persisted to QSPI flash, so **the order in presets.toml is frozen**;
@@ -436,9 +437,9 @@ Looking Glass" (`max_delay_lines = 4.0`) - it is CPU-intensive and crackles abov
 
 **Boot-time memory**: preset text - the embedded bank, or an uploaded bank read from
 QSPI - is parsed from a dedicated 512 KB `DSY_SDRAM_BSS` arena that is not part of `custom_pool`
-(`toml_arena`, `src/sdram_pool.cpp:49-61`; parsing itself is `ParsePresetText()`,
-`src/sdram_pool.cpp:63-70`, a wrapper that resets the arena around the host-portable
-`ParsePresetBankText()`, `src/preset_bank.cpp:961`). The same arena and parser run again at runtime to validate a USB
+(`toml_arena`, `src/sdram_pool.cpp:46-58`; parsing itself is `ParsePresetText()`,
+`src/sdram_pool.cpp:60-67`, a wrapper that resets the arena around the host-portable
+`ParsePresetBankText()`, `src/preset_bank.cpp:955`). The same arena and parser run again at runtime to validate a USB
 upload before anything is written to flash (see "USB-MIDI preset upload" below). Every parse
 starts the arena at offset 0 and resets it on return, so boot and an upload validation never
 overlap, and the reverb's `custom_pool` is unaffected either way. Peak measured usage at boot is
@@ -456,7 +457,7 @@ The current preset and the bypass state are both automatically saved to and load
 `gStorage(hw.seed.qspi)` (`:111`), right after `hw`, because `PersistentStorage` needs the
 board's `QSPIHandle&` at construction.
 
-**Settings Structure** (`src/pedal_storage.h:15-29`):
+**Settings Structure** (`src/pedal_storage.h:15-24`):
 ```cpp
 constexpr int SETTINGS_VERSION = 2;                 // src/pedal_storage.cpp:5
 constexpr uint32_t SETTINGS_SAVE_DELAY_MS = 3000;  // src/pedal_storage.cpp:9
@@ -509,7 +510,7 @@ A sound can be saved into the current preset on the pedal and later reverted to 
 version in the active bank. Saved edits survive power cycles but not a change of firmware
 image or active bank.
 
-**Storage** (`src/pedal_storage.cpp:11-13`, `src/pedal_storage.h:11-12`, `:31-54`, `:58-102`):
+**Storage** (`src/pedal_storage.cpp:11-13`, `src/pedal_storage.h:11-12`, `:26-49`, `:53-97`):
 `PedalStorage`'s `PersistentStorage<UserPresets>` sits at QSPI offset `USER_PRESETS_QSPI_OFFSET` (0x1000). That is the 4 KB sector
 after `Settings`, which sits at offset 0 in sector 0. The Daisy bootloader keeps programs at
 0x90040000 and never touches the first 256 KB
@@ -620,7 +621,7 @@ single-producer / single-consumer ring of length-prefixed records (`kQueueBytes`
 fed from the USB interrupt (`Feed()`) and drained by the main loop (`Pop()`) in arrival order.
 SysEx is queued as the bytes between F0 and F7 (at most `kMaxMessage` = 256), but only frames
 `Handle()` can answer - our `7D 43 53` header or a 4-byte Identity Request (`latchable()`,
-`src/preset_protocol.cpp:34`); every other complete frame is dropped at its F7, so a host that
+`src/preset_protocol.cpp:30`); every other complete frame is dropped at its F7, so a host that
 sends several devices' frames back to back in one transfer (e.g. every known firmware's DFU
 command at once) cannot hide ours. Channel messages are parsed with running status, and only
 `Bn` (Control Change) and `Cn` (Program Change) are queued, as `[status, data...]`; a popped
@@ -691,7 +692,7 @@ matches.
 
 **Boot** (`src/cloudseed.cpp:754-765`): the stored bank is used if `StoredBankText()` returns one
 and it parses; otherwise the embedded bank (`EmbeddedPresetText()`,
-`src/sdram_pool.cpp:72-75`) is used, and a parse failure there is the unrecoverable
+`src/sdram_pool.cpp:69-72`) is used, and a parse failure there is the unrecoverable
 `FatalErrorLoop()` case. Either way `gStorage.Init(active.hash)` mixes the active bank's FNV-1a
 hash into the user-preset `identity` (see "Firmware + bank identity" above), so an upload, a
 revert, or a reflash all wipe saved user presets.
@@ -872,10 +873,10 @@ whose 14-bit value differs from its document.
 **Seeds/Switches/Effects**: TapSeed, DiffusionSeed, DelaySeed, PostDiffusionSeed, CrossSeed, HiPassEnabled, LowPassEnabled, LowShelfEnabled, HighShelfEnabled, CutoffEnabled, LateStageTap, Interpolation
 
 **Early tap animation** (appended after `Interpolation`, in `[preset.params.early]` after `Bloom`):
-- `Scatter` - on/off (on when >= 0.5, `CloudSeed/ReverbController.h:134`); toggle target
+- `Scatter` - on/off (on when >= 0.5, `CloudSeed/ReverbController.h:135`); toggle target
   `early.Scatter` (in `kToggleParams`), and Down on the HotHouse `early.envelope` target
-- `ScatterRate` - 0.1 + Response2Dec(v) × 4.9 Hz (`:135`)
-- `ScatterDepth` - linear 0..1 (`:136`)
+- `ScatterRate` - 0.1 + Response2Dec(v) × 4.9 Hz (`:136`)
+- `ScatterDepth` - linear 0..1 (`:137`)
 
 While Scatter is on, each early tap's gain is scaled by 1 - depth × (1 + sin(2π·phase)) / 2, so
 it oscillates between (1 - depth) and 1 of its static value; every tap has its own seeded phase
@@ -893,7 +894,7 @@ hardware.
 CloudSeed requires massive delay buffers:
 
 ```cpp
-// src/sdram_pool.cpp:19-38
+// src/sdram_pool.cpp:16-35
 static constexpr size_t alignUp8(size_t n) {
     return (n + 7u) & ~static_cast<size_t>(7u);
 }
@@ -921,20 +922,20 @@ rounded up to 8 bytes. Exhaustion is a fatal boot error (`FatalErrorLoop()`, bot
 rather than a null return, because a write through 0x0 would land silently in ITCMRAM.
 `custom_pool_allocate` keeps external linkage and this exact signature: the CloudSeed headers
 declare it `extern`. Callers placement-new into it (e.g.
-`CloudSeed/ModulatedDelay.h:40-41`), so destructors of pool-backed objects must not call
+`CloudSeed/ModulatedDelay.h:42-43`), so destructors of pool-backed objects must not call
 `delete` - see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) §6.
 
 The TOML parse arena is not part of this pool: it is a separate 512 KB `DSY_SDRAM_BSS`
-buffer (`toml_arena`, `src/sdram_pool.cpp:49-61`), used by `ParsePresetText()`
-(`src/sdram_pool.cpp:63-70`) both at boot and to validate a USB upload before it reaches
-flash (see "USB-MIDI preset upload" above). `EmbeddedPresetText()` (`:72-75`) hands out the
+buffer (`toml_arena`, `src/sdram_pool.cpp:46-58`), used by `ParsePresetText()`
+(`src/sdram_pool.cpp:60-67`) both at boot and to validate a USB upload before it reaches
+flash (see "USB-MIDI preset upload" above). `EmbeddedPresetText()` (`:69-72`) hands out the
 embedded bank (presets.toml or presets_hothouse.toml).
 
 ### Core Classes
 
 **ReverbController** ([CloudSeed/ReverbController.h](CloudSeed/ReverbController.h)):
 - Main reverb controller
-- Preset application: `LoadPreset(const float* values)` (`:34-47`) copies a parsed
+- Preset application: `LoadPreset(const float* values)` (`:35-48`) copies a parsed
   `PresetData::params[]` into `parameters[]`, skipping only `LineCount` (written at audio rate
   from the delay-line toggle target; `Bloom` is preset data like everything
   else), then re-applies all 50 slots through `SetParameter`. The
@@ -942,15 +943,15 @@ embedded bank (presets.toml or presets_hothouse.toml).
   before audio starts
 - Single channel: one `ReverbChannel channel`; the stereo remnants (`channelR`, `ChannelLR`,
   the cross-seed of the line seeds) were removed in the engine audit (docs/PERFORMANCE.md §12)
-- Fixed internal block size `static const int bufferSize = 48` (`CloudSeed/ReverbController.h:18`);
+- Fixed internal block size `static const int bufferSize = 48` (`CloudSeed/ReverbController.h:19`);
   `ReverbChannel` sizes its block buffers from it
-- Public API: `LoadPreset(const float*)` `:34`, `SetParameter(Parameter, float)` `:144`,
-  `ClearBuffers()` `:152`, `Process(const float* input, float* output, int bufferSize)` `:157`
+- Public API: `LoadPreset(const float*)` `:35`, `SetParameter(Parameter, float)` `:143`,
+  `ClearBuffers()` `:151`, `Process(const float* input, float* output, int len)` `:156`
   (no copy: `ReverbChannel::Process()` reads `input` and writes `output` directly)
 - Parameter scaling (the normalized 0.0-1.0 → real-unit mapping documented in presets.toml):
-  `GetScaledParameter` `:57`. Continuous values are float; integer results (stage counts,
+  `GetScaledParameter` `:58`. Continuous values are float; integer results (stage counts,
   seeds, the line delay) keep upstream's double arithmetic as explicit casts. `Bloom` and
-  `Scatter` follow the same `< 0.5f ? 0 : 1` rule as every other on/off parameter (`:74`, `:134`)
+  `Scatter` follow the same `< 0.5f ? 0 : 1` rule as every other on/off parameter (`:75`, `:135`)
 - The engine is float-only at audio rate: `CloudSeed/Makefile` builds with
   `-Wdouble-promotion -Werror`, and the `engine_alloc_test` host build (every engine header)
   with `-Werror=double-promotion`
@@ -959,22 +960,22 @@ embedded bank (presets.toml or presets_hothouse.toml).
 - Builds `TotalLineCount` (5) delay lines (`DelayLine* lines[TotalLineCount]`, pool-backed)
   for the mono implementation
   ([CloudSeed/DelayLineCount.h](CloudSeed/DelayLineCount.h)); `SetParameter(LineCount)` clamps the
-  active count to 1..`TotalLineCount` (`CloudSeed/ReverbChannel.h:165-175`)
+  active count to 1..`TotalLineCount` (`CloudSeed/ReverbChannel.h:158-168`)
 - Contains delay lines, diffusers, modulation
 
 **DelayLine** ([CloudSeed/DelayLine.h](CloudSeed/DelayLine.h)):
 - Core delay buffer implementation (251 lines)
 - The delay buffer itself is SDRAM-pool-backed (placement-new into `custom_pool_allocate`,
-  `CloudSeed/ModulatedDelay.h:40-41`)
+  `CloudSeed/ModulatedDelay.h:42-43`)
 - `mixedBuffer` and `filterOutputBuffer` are real heap allocations
-  (`CloudSeed/DelayLine.h:49-50`, freed at `:69-70`); the feedback filters run from the
+  (`CloudSeed/DelayLine.h:50-51`, freed at `:68-69`); the feedback filters run from the
   delay/diffuser output straight into `filterOutputBuffer`
 
 **AllpassDiffuser, MultitapDiffuser**: Diffusion stages (`MultitapDiffuser` also runs Scatter, see "Parameters").
 `AllpassDiffuser` gives each of its two `ModulatedAllpass` stages a 9602-sample ring
 (`2 * MaxDelayMs` at 48 kHz + 2, the longest read with full modulation)
 **ModulatedAllpass, ModulatedDelay**: Modulated processing. `ModulatedAllpass::ClearBuffers()`
-is constant time (`CloudSeed/ModulatedAllpass.h:79`): it resets a `written` count instead of
+is constant time (`CloudSeed/ModulatedAllpass.h:78`): it resets a `written` count instead of
 zeroing the ring, and `ProcessFresh()` reads every slot not yet rewritten as 0, so a diffusion
 enable flip in the audio callback costs no SDRAM sweep (`tests/allpass_clear_test.cpp`)
 
@@ -1059,7 +1060,7 @@ with the parser's message on stderr if the file is rejected), `--print-knob-map`
 `ParsePresetBankText()` with the file's full length, exactly as the pedal does at boot, so an
 empty file or an embedded NUL byte is rejected too. Validation covers non-ASCII bytes
 (any byte >= 0x80, comments included, rejected with its line and column before tomlc99 sees the
-text: `checkAscii()`, `src/preset_bank.cpp:899-924`), the `board` key, TOML syntax,
+text: `checkAscii()`, `src/preset_bank.cpp:898-923`), the `board` key, TOML syntax,
 missing/unknown/misplaced parameters, unknown preset- and root-level keys, out-of-range
 scalars (a parameter value that is non-finite or outside 0..1; `max_delay_lines` /
 `default_delay_lines` that are not whole numbers 1..5 or where the default exceeds the max;
@@ -1071,7 +1072,7 @@ through a replica of `TOML_ARENA_SIZE` (512 KB, 8-byte aligned, no reuse), so `p
 terrarium presets valid, boot arena peak 147096 of 524288 bytes` (and `presets_hothouse.toml:
 10 hothouse presets valid, boot arena peak 143992 of 524288 bytes`) is the same peak the pedal sees. Host
 pointers are 64-bit, so the reported peak over-estimates the 32-bit target: a pass here implies
-a fit on hardware. A near-miss should be fixed by raising `TOML_ARENA_SIZE` (`src/sdram_pool.cpp:49`),
+a fit on hardware. A near-miss should be fixed by raising `TOML_ARENA_SIZE` (`src/sdram_pool.cpp:46`),
 not by loosening the host check.
 
 Preset values are free to change: `make presets-check` fails only on input the parser rejects.
@@ -1105,7 +1106,7 @@ exits non-zero on any failed `CHECK()` ([tests/check.h](tests/check.h)):
   must each be rejected with a specific message (non-ASCII bytes in a value and in a comment
   among them), a check of the line and column reported for a non-ASCII byte, mutations that
   must be accepted (`kAccepts`), a float `led_on_ms = 300.0` that must be honoured, and a
-  31-byte name that must be kept whole; then the HotHouse fixture (the same two presets) with
+  31-byte name that must be accepted; then the HotHouse fixture (the same two presets) with
   `kHotHouseRejects` / `kHotHouseAccepts`, the HotHouse-only targets on a Terrarium bank
   (`kTerrariumBoardRejects`), and the cross-board `board` mismatch. `ParsePresetBankText()` is checked to parse exactly
   `length` bytes of text with no NUL terminator, to leave its source untouched, to release
@@ -1217,14 +1218,14 @@ A Seed running other firmware needs BOOT/RESET (or that firmware's own DFU comma
 ### Compiler Configuration
 
 **Platform**: ARM GCC (`arm-none-eabi-gcc`)
-**CPU**: Cortex-M7 (`-mcpu=cortex-m7`, `CloudSeed/Makefile:70`)
-**Optimization**: `-O3` (`Makefile:52`, `CloudSeed/Makefile:20`)
-**FPU**: Hard float (`-mfpu=fpv5-d16 -mfloat-abi=hard`, `CloudSeed/Makefile:73-76`)
-**Language**: C++14 (`-std=gnu++14`, `CloudSeed/Makefile:67`)
+**CPU**: Cortex-M7 (`-mcpu=cortex-m7`, `CloudSeed/Makefile:54`)
+**Optimization**: `-O3` (`Makefile:52`, `CloudSeed/Makefile:17`)
+**FPU**: Hard float (`-mfpu=fpv5-d16 -mfloat-abi=hard`, `CloudSeed/Makefile:57-60`)
+**Language**: C++14 (`-std=gnu++14`, `CloudSeed/Makefile:51`)
 **Float flags**: `-ffast-math` on both the app (`Makefile:75`) and the library
-(`CloudSeed/Makefile:106`); the library additionally uses `-fno-exceptions`,
+(`CloudSeed/Makefile:82`); the library additionally uses `-fno-exceptions`,
 `-finline-functions`, `-fno-aggressive-loop-optimizations`, and `-Wdouble-promotion` (an error
-under the library's `-Werror`: audio-rate engine math is float-only) (`CloudSeed/Makefile:104-109`)
+under the library's `-Werror`: audio-rate engine math is float-only) (`CloudSeed/Makefile:79-85`)
 **App type**: `BOOT_SRAM` (`Makefile:6`)
 
 ## Common Modifications
@@ -1417,8 +1418,8 @@ Rules the parser enforces (a violation fails `make` before the blob is embedded;
 ever flashed it would stop boot and blink both LEDs):
 - The bank must be plain ASCII, comments included (`line L, column C: non-ASCII byte 0xNN`):
   tomlc99 passes plain `char`s to `isdigit()`, which is undefined for bytes >= 0x80, so
-  `ParsePresetBank()` rejects them before parsing (`src/preset_bank.cpp:899-924`, called from
-  `ParsePresetBank()` at `:931`)
+  `ParsePresetBank()` rejects them before parsing (`src/preset_bank.cpp:898-923`, called from
+  `ParsePresetBank()` at `:937`)
 - The root key `board` must name the board the bank is built or uploaded for (`missing board =
   "<thisboard>"`, `board '<x>' is not "terrarium" or "hothouse"`, `bank is for board "<file>",
   this pedal is "<this>"`)
@@ -1488,10 +1489,10 @@ constexpr int TotalLineCount = 5;  // CloudSeed/DelayLineCount.h:14
 `TotalLineCount` is the single definition of how many `DelayLine`s `ReverbChannel` builds, and
 everything that depends on it follows automatically:
 - `ReverbChannel::SetParameter(LineCount)` clamps the active count to 1..`TotalLineCount`
-  (`CloudSeed/ReverbChannel.h:165-175`), so no caller can make `Process` loop past the lines that
-  exist (`:339`, `:343`). The lower bound matters too: `ReverbController::LoadPreset()` re-applies
+  (`CloudSeed/ReverbChannel.h:158-168`), so no caller can make `Process` loop past the lines that
+  exist (`:322`, `:326`). The lower bound matters too: `ReverbController::LoadPreset()` re-applies
   the stored `LineCount`, which is 0 at boot until the audio callback sets the real count
-- `readLineCount()` (`src/preset_bank.cpp:198-214`) validates `default_delay_lines` /
+- `readLineCount()` (`src/preset_bank.cpp:199-215`) validates `default_delay_lines` /
   `max_delay_lines` against it, so `make` rejects a preset asking for more lines than exist,
   naming the preset and key: `preset N: max_delay_lines must be a whole number 1..<TotalLineCount>`.
   The `preset_check` and `preset_bank_test` rules list the header as a prerequisite, so they are
@@ -1557,7 +1558,7 @@ Two sizes are coupled and must change together:
   smoothing"). It sizes the file-scope `gInputBuffer`, `gWetBuffer`,
   `gReverseBuffer` and `gReverbInputBuffer` (`src/cloudseed.cpp:344-347`) and every callback loop;
   `main()` stops in `FatalErrorLoop()` if `hw.AudioBlockSize()` differs (`src/cloudseed.cpp:748-749`)
-- `ReverbController::bufferSize` (`CloudSeed/ReverbController.h:18`) sizes the engine's
+- `ReverbController::bufferSize` (`CloudSeed/ReverbController.h:19`) sizes the engine's
   block buffers (`ReverbChannel`, `DelayLine`, the diffusers' outputs)
 
 Raising `AUDIO_BUFFER_SIZE` but not `bufferSize` overruns the engine's block buffers.
@@ -1566,7 +1567,7 @@ Smaller blocks = lower latency, higher CPU load; larger blocks = higher latency,
 These are counted in callbacks and assume the 1 ms block (48 samples at 48 kHz); rescale them
 with the block period:
 - `kKnobGlideBlocks` (`src/knob_bank.h:27`): 50 blocks = the 50 ms takeover glide
-- `kLongHoldBlocks` (`src/footswitch_gestures.h:24`): 5000 blocks = the 5 s save / restore holds
+- `kLongHoldBlocks` (`src/footswitch_gestures.h:25`): 5000 blocks = the 5 s save / restore holds
 - `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:50`): a per-callback one-pole coefficient, ~20 ms
   at 1 kHz
 - libdaisy's `Switch::Debounce()` shifts at most once per ms (`libdaisy/src/hid/switch.cpp:34`):
@@ -1915,10 +1916,10 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
 
 | Region | Terrarium | HotHouse |
 |---|---|---|
-| SRAM (`.text`+`.data`, 480KB `BOOT_SRAM`) | 230,008 B (46.80%) | 230,056 B |
-| DTCMRAM (128KB) | 53,884 B (41.11%) | 53,948 B |
+| SRAM (`.text`+`.data`, 480KB `BOOT_SRAM`) | 228,088 B (46.40%) | 228,144 B |
+| DTCMRAM (128KB) | 53,372 B (40.72%) | 53,436 B |
 | RAM_D2_DMA (32KB) | 17,692 B (53.99%) | 17,692 B |
-| SDRAM (64MB) | 51,922,352 B (77.37%) | 51,922,352 B |
+| SDRAM (64MB) | 51,921,840 B (77.37%) | 51,921,840 B |
 
 - SDRAM is entirely static `DSY_SDRAM_BSS`: `custom_pool`
   50,331,648 B + `reverseDelayBuffer` 768,000 B (192,000 floats = 4 s @ 48 kHz, sized so the
@@ -1926,15 +1927,15 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
   `CloudSeed::FastSin::data` 131,072 B + `AudioLib::ValueTables` tables 64,016 B (see the
   `.sdram_bss` section in `build/<board>/cloudseed.map`) + the 512 KB `toml_arena` (not part of
   `custom_pool`; `src/sdram_pool.cpp`, used at boot and to validate USB uploads) + the 96 KiB
-  `gUploadText` upload receive buffer + the 5,000 B `gUploadCheck` validation `PresetBank`
+  `gUploadText` upload receive buffer + the 4,484 B `gUploadCheck` validation `PresetBank`
   (`src/cloudseed.cpp`)
 - The runtime heap is not in this report: it grows from `end` in RAM_D2
   (`libdaisy/core/STM32H750IB_sram.lds:239-250`), which is where `DelayLine`'s
-  `mixedBuffer` and `filterOutputBuffer` (`CloudSeed/DelayLine.h:49-50`) land
+  `mixedBuffer` and `filterOutputBuffer` (`CloudSeed/DelayLine.h:50-51`) land
 - SRAM: of that, the embedded bank blob is 50,376 B (Terrarium, `build/terrarium/presets_toml.o`)
   / 50,712 B (HotHouse) - it carries the per-preset `[preset.knob_map]`, `[preset.toggle_map]`,
   `[preset.params.reverse]` and `[preset.params.delay_lines]` tables - tomlc99 is 14,371 B, and
-  `preset_bank.o` is 9,178 B. The two boards differ only in the blob and the toggle code
+  `preset_bank.o` is 9,162 B. The two boards differ only in the blob and the toggle code
 - DTCMRAM: most of it beyond the app's own state is libdaisy's USB device stack, pulled in by
   `UsbMidiLink`: the four 2 KB `UserRxBufferFS`/`UserTxBufferFS`/
   `UserRxBufferHS`/`UserTxBufferHS` ring buffers, `midi_usb_handle` (2,112 B),
@@ -1944,8 +1945,8 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
   and its `MidiInQueue` with the 4 KB receive ring plus a 256 B SysEx buffer),
   `gPresetProtocol` (324 B), `gMidiMailbox` (276 B), `gMidiReporter` (220 B), `gMidiDecoder`
   (64 B) and `gCpuLoad` (`CpuLoadWindow`, 40 B) (`arm-none-eabi-nm -S --size-sort -C
-  build/terrarium/cloudseed.elf`). Also includes the 5,000 B `gPresets` bank
-  (40 B of each 312 B preset slot is the knob + toggle maps: 24 B knobs, 16 B toggles), the
+  build/terrarium/cloudseed.elf`). Also includes the 4,484 B `gPresets` bank
+  (40 B of each 280 B preset slot is the knob + toggle maps: 24 B knobs, 16 B toggles), the
   7,116 B `gStorage` (most of it the user-preset `PersistentStorage`, which keeps a
   defaults copy and a live copy of the 3,524 B `UserPresets`), and the 220 B `gSaveSnapshot`.
   MIDI live control added about 9.8 KB of DTCMRAM (from 44,116 B, mostly the link's queues)
@@ -1966,7 +1967,8 @@ per-line gain, hot-loop modulo/precision fixes, placement-new/delete destructor 
 bypass copy, allocation-free parameter updates, engine state defined before its first
 read, the idle-free USB-MIDI preset link, and the 2026-11 engine audit: float-only audio-rate
 math, the constant-time allpass clear, right-sized buffers, locals in the hot loops, dead code
-removed, and the placement moves still open), each with the exact file/line and pattern it addresses.
+removed, and the placement moves still open; the follow-up dead-code sweep and the
+`CloudSeed/Makefile` dependency fix), each with the exact file/line and pattern it addresses.
 
 ## Further Resources
 
@@ -2005,7 +2007,7 @@ Key changes in this fork:
 3. Added preset cycling via footswitch
 4. Simplified control scheme for guitar pedal use
 5. Added delay line switching via toggle switches
-6. **Bypass state persisted to flash** alongside the preset (`SETTINGS_VERSION = 2`, `src/pedal_storage.cpp:5`; `Settings` at `src/pedal_storage.h:15-29`)
+6. **Bypass state persisted to flash** alongside the preset (`SETTINGS_VERSION = 2`, `src/pedal_storage.cpp:5`; `Settings` at `src/pedal_storage.h:15-24`)
 7. **Persistent preset storage** in QSPI flash memory with version control
 8. **LED2 blink pattern system** for visual preset indication
 9. **TOML-defined presets**: all preset data lives in [presets.toml](presets.toml) (and [presets_hothouse.toml](presets_hothouse.toml)), embedded in
@@ -2130,7 +2132,7 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
   `src/cloudseed.cpp:250-277`, `applyToggleTarget()` `src/cloudseed.cpp:283-310`
 - Preset data: `presets.toml` (Terrarium) / `presets_hothouse.toml` (HotHouse), embedded via
   `src/presets_toml.s`, parsed by `src/preset_bank.cpp`
-- Preset application: `CloudSeed/ReverbController.h:34` (`LoadPreset`)
+- Preset application: `CloudSeed/ReverbController.h:35` (`LoadPreset`)
 - Parameters: `CloudSeed/Parameter.h`; names table: `CloudSeed/ParameterNames.h`
 - Hardware config: `src/board.h` (`PedalBoard`, pins per board)
 - USB-MIDI preset upload: [docs/USB_MIDI.md](docs/USB_MIDI.md) (protocol, for host authors);
@@ -2210,5 +2212,5 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
 8. Toggle map schema/validation → `parseToggleMap()` / `parseToggleTarget()` in
    [src/preset_bank.cpp](src/preset_bank.cpp); shared with knobs via `splitTarget()` /
    `resolveParamTarget()`
-9. User preset store → `UserPreset` / `UserPresets` (`src/pedal_storage.h:34-51`), `PedalStorage::Init()`
+9. User preset store → `UserPreset` / `UserPresets` (`src/pedal_storage.h:29-46`), `PedalStorage::Init()`
    (`src/pedal_storage.cpp:41-56`), save/restore handling in the main loop (`src/cloudseed.cpp:826-840`)

@@ -11,20 +11,15 @@
 constexpr uint32_t QSPI_SECTOR_BYTES = 4096;
 constexpr uint32_t USER_PRESET_VALID = 1u;  // erased flash reads 0xFFFFFFFF
 
-// Persistent Settings
+// Preset index and bypass state, QSPI offset 0.
 struct Settings {
-    int version;        // Version of the settings struct
-    int currentPreset;  // 0 .. gPresets.count-1
-    bool bypass;         // Persisted bypass state (true = pedal was bypassed at last save)
+    int  version;        // SETTINGS_VERSION
+    int  currentPreset;  // 0 .. gPresets.count-1
+    bool bypass;         // true = the pedal was bypassed at the last save
 
-    // Overloading the != operator
-    // This is necessary as this operator is used in the PersistentStorage source code
+    // Required by PersistentStorage: decides whether Save() erases and writes.
     bool operator!=(const Settings& a) const {
-        return !(
-            a.version == version &&
-            a.currentPreset == currentPreset &&
-            a.bypass == bypass
-        );
+        return a.version != version || a.currentPreset != currentPreset || a.bypass != bypass;
     }
 };
 
@@ -38,7 +33,7 @@ struct UserPreset {
                                                // = DelayLines_One / _Default / _Max
     float    reverseEnabled;                   // state.reverseEnabled at save time, 0.0 or 1.0
     float    reverseDirectMix;                 // state.reverseDirectMix at save time, 0.0 or 1.0
-    uint32_t valid;                            // USER_PRESET_VALID, else load from presets.toml
+    uint32_t valid;                            // USER_PRESET_VALID, else load from the active bank
 };
 
 struct UserPresets {
@@ -76,7 +71,7 @@ public:
     // Main loop only. Mirrors pedal state and writes a pending change now instead of
     // after the delay; called before a firmware-initiated reboot.
     void FlushSettingsSave(int currentPreset, bool bypass);
-    // One preset's saved edit; valid != USER_PRESET_VALID means "use presets.toml".
+    // One preset's saved edit; valid != USER_PRESET_VALID means "use the active bank".
     UserPreset& UserSlot(int preset) { return userPresets_.GetSettings().presets[preset]; }
     // Blocking QSPI erase + write of every slot; skipped when flash already matches.
     void SaveUserPresets() { userPresets_.Save(); }
@@ -87,7 +82,7 @@ public:
     // Main loop only, blocking (erase + program + verify, up to ~3 s). The header is
     // programmed last, so an interrupted write leaves no valid bank.
     bool WriteStoredBank(const char* text, uint32_t length, uint32_t textHash);
-    // Erases the header sector: the next boot uses the embedded presets.toml.
+    // Erases the header sector: the next boot uses the embedded bank.
     bool EraseStoredBank();
 
 private:

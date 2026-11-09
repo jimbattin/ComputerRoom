@@ -24,7 +24,6 @@ namespace CloudSeed
 	private:
 		float parameters[(int)Parameter::Count];
 		int samplerate;
-		int bufferSize;
 
 		ModulatedDelay preDelay;
 		MultitapDiffuser multitap;
@@ -33,10 +32,9 @@ namespace CloudSeed
 		AudioLib::SeedSeries<TotalLineCount * 3> lineSeeds;  // delay, mod amount, mod rate per line
 		AudioLib::Hp1 highPass;
 		AudioLib::Lp1 lowPass;
-		float* tempBuffer;
-		int postDiffusionSeed;
+		float* tempBuffer;  // filtered input, then the sum of the line outputs
 
-		// Used the the main process loop
+		// Used by the main process loop
 		int lineCount;
 		float perLineGain;
 
@@ -60,8 +58,6 @@ namespace CloudSeed
 			for (int i = 0; i < TotalLineCount; i++)
 				lines[i] = new (custom_pool_allocate(sizeof(DelayLine)))DelayLine(bufferSize, samplerate);
 
-			this->bufferSize = bufferSize;
-
 			for (auto value = 0; value < (int)Parameter::Count; value++)
 				this->parameters[value] = 0.0f;
 
@@ -71,14 +67,12 @@ namespace CloudSeed
 			diffuserEnabled = false;
 			highPassEnabled = false;
 			lowPassEnabled = false;
-			postDiffusionSeed = 0;
 			dryOut = 0.0f;
 			predelayOut = 0.0f;
 			earlyOut = 0.0f;
 			lineOut = 0.0f;
 			lineCount = TotalLineCount;
 			perLineGain = 1.0f / std::sqrt((float)lineCount);
-			diffuser.SetInterpolationEnabled(true);
 			highPass.SetCutoffHz(20);
 			lowPass.SetCutoffHz(20000);
 
@@ -89,10 +83,9 @@ namespace CloudSeed
 
 		~ReverbChannel()
 		{
-			// lines/tempBuffer are placement-new'd into the
-			// SDRAM bump-allocator pool (custom_pool_allocate) and are never freed;
-			// the pool has no matching deallocator. Explicitly run DelayLine's
-			// destructor without attempting to deallocate its pool-backed storage.
+			// lines/tempBuffer are placement-new'd into the SDRAM bump-allocator pool
+			// (custom_pool_allocate), which has no deallocator: run DelayLine's
+			// destructor without freeing its storage.
 			for (DelayLine* line : lines)
 				line->~DelayLine();
 		}
@@ -103,8 +96,8 @@ namespace CloudSeed
 
 			switch (para)
 			{
-			// Stored to parameters[] above; no per-channel action in the mono fork.
-			// (InputMix L/R mixing is disabled — see ReverbController.h GetScaledParameter.)
+			// InputMix mixed the stereo inputs upstream and does nothing in the mono
+			// engine; Unused and Count are not parameters.
 			case Parameter::InputMix:
 			case Parameter::Unused:
 			case Parameter::Count:
@@ -174,9 +167,11 @@ namespace CloudSeed
 				perLineGain = 1.0f / std::sqrt((float)lineCount);
 				break;
 			case Parameter::LineDelay:
-				UpdateLines();
-				break;
 			case Parameter::LineDecay:
+			case Parameter::LineModAmount:
+			case Parameter::LineModRate:
+			case Parameter::LateDiffusionModAmount:
+			case Parameter::LateDiffusionModRate:
 				UpdateLines();
 				break;
 
@@ -230,18 +225,6 @@ namespace CloudSeed
 			case Parameter::EarlyDiffusionModRate:
 				diffuser.SetModRate(value);
 				break;
-			case Parameter::LineModAmount:
-				UpdateLines();
-				break;
-			case Parameter::LineModRate:
-				UpdateLines();
-				break;
-			case Parameter::LateDiffusionModAmount:
-				UpdateLines();
-				break;
-			case Parameter::LateDiffusionModRate:
-				UpdateLines();
-				break;
 
 			case Parameter::TapSeed:
 				multitap.SetSeed((int)value);
@@ -254,8 +237,8 @@ namespace CloudSeed
 				UpdateLines();
 				break;
 			case Parameter::PostDiffusionSeed:
-				postDiffusionSeed = (int)value;
-				UpdatePostDiffusion();
+				for (int i = 0; i < TotalLineCount; i++)
+					lines[i]->SetDiffuserSeed((int)value * (i + 1));
 				break;
 
 			case Parameter::CrossSeed:
@@ -360,9 +343,7 @@ namespace CloudSeed
 
 		void ClearBuffers()
 		{
-			for (int i = 0; i < bufferSize; i++)
-				tempBuffer[i] = 0.0;
-
+			// tempBuffer needs no clear: Process() writes it before reading it.
 			highPass.ClearBuffers();
 			lowPass.ClearBuffers();
 
@@ -409,12 +390,6 @@ namespace CloudSeed
 				lines[i]->SetDiffuserModAmount(lateDiffusionModAmount);
 				lines[i]->SetDiffuserModRate(lateDiffusionModRate);
 			}
-		}
-
-		void UpdatePostDiffusion()
-		{
-			for (int i = 0; i < TotalLineCount; i++)
-				lines[i]->SetDiffuserSeed(((long long)postDiffusionSeed) * (i + 1));
 		}
 
 		float Ms2Samples(float value)

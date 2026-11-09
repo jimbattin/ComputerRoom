@@ -27,7 +27,7 @@ namespace CloudSeed
         float* buffer = nullptr;
         int size = 0;       // buffer length in samples
         int W = 2;          // grain window length in samples (reverse time)
-        int Xf = 1;         // crossfade length in samples (Xf < W/2)
+        int Xf = 1;         // crossfade length in samples (1 <= Xf <= W/2)
         float fadeScale = 0.25f; // 0.25 / Xf: FastSin index of a fade position (quarter wave)
         int hop = 1;        // samples between grain launches (W - Xf)
         int writeIndex = 0;
@@ -63,7 +63,7 @@ namespace CloudSeed
         // between Process() blocks: the recording and writeIndex are untouched, so
         // only the playback window length changes. Grains already past the new
         // window end are retired here, which keeps Window() inside its [0, W) domain
-        // (a stale phase >= W would make the sin() fade argument negative and jump
+        // (a stale phase >= W would make the fade index negative and jump
         // the grain gain). hopCounter is clamped so a shrink cannot leave a gap
         // longer than the new hop before the next grain launches.
         void SetGrainSamples(int grainSamples)
@@ -75,11 +75,9 @@ namespace CloudSeed
 
             W = g;
             Xf = W / 8;
-            if (Xf < 1) Xf = 1;
-            if (Xf > W / 2) Xf = W / 2;
+            if (Xf < 1) Xf = 1;  // W >= 2, so Xf <= W/2 and hop >= W/2 >= 1
             fadeScale = 0.25f / (float)Xf;
             hop = W - Xf;
-            if (hop < 1) hop = 1;
 
             if (hopCounter > hop) hopCounter = hop;
             for (int i = 0; i < MaxGrains; i++)

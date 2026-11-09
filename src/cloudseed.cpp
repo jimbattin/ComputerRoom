@@ -148,7 +148,7 @@ static bool validateUpload(const char* text, uint32_t length, char* err, int err
  */
 
 // Antilog reverse-window mapping via the same ValueTables pattern the engine uses for
-// Parameter::LineDelay (CloudSeed/ReverbController.h:114): min + table * span.
+// Parameter::LineDelay (ReverbController::GetScaledParameter): min + table * span.
 // Response3Oct is (8^x - 1) / 7 normalized, so 0.0 -> 20ms, 0.4771 -> ~500ms, 1.0 -> 2000ms.
 static float reverseWindowMs(float norm) {
     return REVERSE_TIME_MIN_MS
@@ -178,8 +178,8 @@ static bool toggleMapTargets(const PresetData& p, ::Parameter param) {
     return false;
 }
 
-// Loads a preset: the user's saved edit if that slot holds one, else the factory
-// values from presets.toml.
+// Loads a preset: the user's saved edit if that slot holds one, else its values in the
+// active bank.
 static void loadPreset(int presetIndex) {
     // Validate preset index
     if (presetIndex < 0 || presetIndex >= gPresets.count) {
@@ -201,7 +201,7 @@ static void loadPreset(int presetIndex) {
 
     // Apply the preset's non-parameter configuration to pedal state. This is the
     // only place gPresets is read after boot; the audio callback uses the copies.
-    // None of it is user-editable, so it always comes from presets.toml: the saved
+    // None of it is user-editable, so it always comes from the active bank: the saved
     // delay-line mode only chooses between the line counts.
     memcpy(state.knobMap, p.knobMap, sizeof state.knobMap);
     memcpy(state.toggleMap, p.toggleMap, sizeof state.toggleMap);
@@ -264,12 +264,12 @@ static void applyKnobTarget(const KnobTarget& target, float value) {
     case ::Parameter::HighPass:
         if (!state.hiPassOwnedByToggle
             && reverb->GetAllParameters()[(int)::Parameter::HiPassEnabled] < 0.5f)
-            reverb->SetParameter(::Parameter::HiPassEnabled, 1.0f);
+            setParameter(::Parameter::HiPassEnabled, 1.0f);
         break;
     case ::Parameter::LowPass:
         if (!state.lowPassOwnedByToggle
             && reverb->GetAllParameters()[(int)::Parameter::LowPassEnabled] < 0.5f)
-            reverb->SetParameter(::Parameter::LowPassEnabled, 1.0f);
+            setParameter(::Parameter::LowPassEnabled, 1.0f);
         break;
     default:
         break;
@@ -299,8 +299,8 @@ static void applyToggleTarget(const ToggleTarget& target, uint8_t position) {
         state.delayLines = (DelayLinesMode)position;
         break;
     case ToggleTarget_EarlyEnvelope:     // Down / Middle / Up = Scatter / neither / Bloom
-        reverb->SetParameter(::Parameter::Scatter, position == kToggleDown ? 1.0f : 0.0f);
-        reverb->SetParameter(::Parameter::Bloom, on ? 1.0f : 0.0f);
+        setParameter(::Parameter::Scatter, position == kToggleDown ? 1.0f : 0.0f);
+        setParameter(::Parameter::Bloom, on ? 1.0f : 0.0f);
         break;
     case ToggleTarget_ReverseMode:       // Down / Middle / Up = off / into reverb / direct
         state.reverseEnabled   = position != kToggleDown;
@@ -309,8 +309,8 @@ static void applyToggleTarget(const ToggleTarget& target, uint8_t position) {
     }
 }
 
-// Current value of whatever a knob is mapped to, in knob (0..1) space. SetParameter
-// stores knob values verbatim in parameters[] (CloudSeed/ReverbController.h:170), so
+// Current value of whatever a knob is mapped to, in knob (0..1) space.
+// ReverbController::SetParameter() stores knob values verbatim in parameters[], so
 // this is directly comparable to a raw knob position.
 static float knobTargetValue(const KnobTarget& target) {
     if (target.kind == KnobTarget_ReverseDelay)
@@ -359,8 +359,8 @@ static void processFootswitches() {
         SetBypassLed(state.bypass);
     }
 
-    // FS2 released with no secondary knob write during the hold: next preset (the
-    // actual change happens in the main loop).
+    // FS2 released with no secondary knob or toggle write during the hold: next preset
+    // (the actual change happens in the main loop).
     if (ev.cyclePreset)
         state.triggerPresetChange = true;
 
@@ -416,8 +416,8 @@ static void applyMidiWrites(int bank) {
 }
 
 // Every knob and toggle write lives here, and the caller skips it while the main loop is
-// loading a preset: it is rewriting state.knobMap / state.toggleMap and all 47 engine
-// parameters at the same time. The knob and toggle re-park is gated for the same
+// loading a preset: it is rewriting state.knobMap / state.toggleMap and every engine
+// parameter at the same time. The knob and toggle re-park is gated for the same
 // reason (it must not straddle a map rewrite); controlResetPending simply stays set
 // until the load completes.
 static void updateEngineControls(int bank, const float* knobPositions,

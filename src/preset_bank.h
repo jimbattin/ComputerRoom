@@ -7,7 +7,7 @@
 #include "CloudSeed/Parameter.h"
 
 constexpr int kMaxPresets       = 16;
-constexpr int kMaxPresetNameLen = 32;
+constexpr int kMaxPresetNameLen = 32;  // a preset name is at most kMaxPresetNameLen - 1 bytes
 
 // The pedal a bank is written for: the root key `board` in the TOML. Each firmware
 // build is for one board (board.h) and rejects a bank for the other.
@@ -71,7 +71,6 @@ enum DelayLinesMode : uint8_t {
 };
 
 struct PresetData {
-    char     name[kMaxPresetNameLen];
     int      blinks;
     uint32_t onDurationMs;
     uint32_t offDurationMs;
@@ -96,7 +95,6 @@ struct PresetData {
 };
 
 struct PresetBank {
-    Board      board;
     int        count;
     PresetData presets[kMaxPresets];
 };

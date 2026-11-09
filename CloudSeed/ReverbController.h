@@ -4,6 +4,7 @@
 #ifndef REVERBCONTROLLER
 #define REVERBCONTROLLER
 
+#include <cmath>
 #include "Parameter.h"
 #include "ReverbChannel.h"
 #include "AudioLib/ValueTables.h"
@@ -35,8 +36,8 @@ namespace CloudSeed
 		{
 			for (int i = 0; i < (int)Parameter::Count; i++)
 			{
-				// LineCount comes from the "delay_lines.max" toggle target at audio
-				// rate; every other slot, Bloom included, is preset data.
+				// LineCount comes from the delay-line toggle target at audio rate;
+				// every other slot, Bloom included, is preset data.
 				if (i == (int)Parameter::LineCount)
 					continue;
 				parameters[i] = values[i];
@@ -137,8 +138,6 @@ namespace CloudSeed
 
 			default: return 0.0f;
 			}
-
-			return 0.0f;
 		}
 
 		void SetParameter(Parameter param, float value)
@@ -154,9 +153,9 @@ namespace CloudSeed
 			channel.ClearBuffers();
 		}
 
-		void Process(const float* input, float* output, int bufferSize)
+		void Process(const float* input, float* output, int len)
 		{
-			channel.Process(input, output, bufferSize);
+			channel.Process(input, output, len);
 		}
 		
 	private:

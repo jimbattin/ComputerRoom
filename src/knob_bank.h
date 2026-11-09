@@ -59,13 +59,8 @@ public:
         // current position, so the next turn glides from the new value.
         for (int i = 0; i < kKnobCount; i++)
         {
-            if (!repark[i])
-                continue;
-            snapshot[i]  = positions[i];
-            live[i]      = false;
-            glideStep[i] = 0;
-            applied[i]   = 0.0f;
-            repark[i]    = false;
+            if (repark[i])
+                park(i, positions[i]);
         }
 
         int n = 0;
@@ -87,8 +82,8 @@ public:
     void Repark(int knob) { repark[knob] = true; }
 
 private:
-    float snapshot[kKnobCount]  = {};  // position at the last Reset()
-    float applied[kKnobCount]   = {};  // last value written (glide start before the first write)
+    float snapshot[kKnobCount]  = {};  // position when the knob was last parked
+    float applied[kKnobCount]   = {};  // last value written (set when the knob goes live)
     float glideFrom[kKnobCount] = {};  // target value when the knob went live
     int   glideStep[kKnobCount] = {};  // 0 = not gliding, else next step 1..kKnobGlideBlocks
     bool  live[kKnobCount]      = {};  // true once the knob has taken over its target
@@ -96,17 +91,19 @@ private:
     int   activeBank            = 0;   // bank the snapshot was taken for
     bool  primed                = false;  // false until Reset() has seen real positions
 
+    // `applied` and `glideFrom` are only read while live, and going live sets both.
+    void park(int i, float position)
+    {
+        snapshot[i]  = position;
+        glideStep[i] = 0;
+        live[i]      = false;
+        repark[i]    = false;
+    }
+
     void Reset(const float* positions, int bank)
     {
         for (int i = 0; i < kKnobCount; i++)
-        {
-            snapshot[i]  = positions[i];
-            applied[i]   = 0.0f;
-            glideFrom[i] = 0.0f;
-            glideStep[i] = 0;
-            live[i]      = false;
-            repark[i]    = false;
-        }
+            park(i, positions[i]);
         activeBank = bank;
         primed     = true;
     }
@@ -116,9 +113,6 @@ private:
     // nothing to `out`, while parked or while the value would not change.
     bool Update(int i, float position, float currentValue, float& out)
     {
-        if (!primed)
-            return false;
-
         float target = position;
         if (target <= kKnobRailWindow)
             target = 0.0f;

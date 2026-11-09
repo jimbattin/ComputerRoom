@@ -5,8 +5,9 @@
 //   FS1 tap            toggle bypass (on release)
 //   FS1 hold 5 s       save the current sound into the current preset (fires while held)
 //   FS2 tap            next preset (on release)
-//   FS2 hold           secondary knob bank; the release cycles only if no secondary knob wrote
-//   FS1 + FS2 hold 5 s restore the current preset to factory (fires while held)
+//   FS2 hold           secondary knob and toggle bank; the release cycles only if no
+//                      secondary knob or toggle wrote
+//   FS1 + FS2 hold 5 s restore the current preset to its active-bank values (fires while held)
 //
 // libdaisy's Switch is an 8-bit shift register clocked once per audio block
 // (libdaisy/src/hid/switch.cpp:39-41): Pressed() is state_ == 0xff, FallingEdge() is
@@ -18,14 +19,14 @@
 // Once both switches have been held at the same time they form a chord: neither
 // release toggles bypass or cycles the preset until both are up again, however far
 // apart the two presses and releases land. The callback calls MarkEdited() when a
-// secondary-bank knob wrote during the FS2 hold. Host-portable: no libdaisy.
+// secondary-bank knob or toggle wrote during the FS2 hold. Host-portable: no libdaisy.
 
 // Update() calls (1 ms audio blocks) a long hold must last: 5 s.
 constexpr int kLongHoldBlocks = 5000;
 
 struct FootswitchEvents {
     bool toggleBypass  = false;  // FS1 released: not a long hold, not part of a chord
-    bool cyclePreset   = false;  // FS2 released: not part of a chord, no secondary knob wrote
+    bool cyclePreset   = false;  // FS2 released: not part of a chord, no secondary write
     bool savePreset    = false;  // FS1 held alone for kLongHoldBlocks (fires while held)
     bool restorePreset = false;  // FS1 + FS2 held together for kLongHoldBlocks (fires while held)
 };
@@ -82,8 +83,8 @@ public:
         return ev;
     }
 
-    bool PresetHeld() const { return presetHeld; }  // secondary knob bank
-    void MarkEdited() { presetEdited = true; }      // a secondary knob wrote during the FS2 hold
+    bool PresetHeld() const { return presetHeld; }  // secondary knob and toggle bank
+    void MarkEdited() { presetEdited = true; }      // a secondary knob or toggle wrote during the FS2 hold
 
 private:
     bool bypassHeld       = false;

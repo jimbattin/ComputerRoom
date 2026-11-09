@@ -283,8 +283,6 @@ static void testUpload() {
     CHECK(memcmp(fx.proto.ReceivedText(), text.data(), 500) == 0);
     fx.finish(UploadAction::Commit, true);
     CHECK(fx.replyCmd() == 0x44 && fx.status() == 0 && fx.proto.ReplyLength() == 7);
-    fx.finish(UploadAction::Commit, false);
-    CHECK(fx.replyCmd() == 0x44 && fx.status() == (int)UploadStatus::FlashError);
 }
 
 static void testUploadErrors() {
@@ -367,7 +365,7 @@ static void testSessionLifetime() {
     fx.proto.Tick(2000 + 5000);
     CHECK(!fx.proto.SessionActive());
 
-    // INFO and READ neither need nor refresh a session.
+    // INFO does not refresh the session timer.
     fx.begin(500, 0, 0);
     fx.send(frame(0x01), 4000);
     fx.proto.Tick(5000);

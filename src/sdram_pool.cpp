@@ -1,12 +1,9 @@
-#include <stdio.h>
-#include <string.h>
-
 #include "daisy_seed.h"
 #include "sdram_pool.h"
 #include "pedal_leds.h"
 
-// The built-in preset bank: presets.toml, embedded into the firmware image by
-// presets_toml.s (see EmbeddedPresetText()).
+// The built-in preset bank (presets.toml or presets_hothouse.toml, by BOARD), embedded
+// into the firmware image by presets_toml.s (see EmbeddedPresetText()).
 extern "C" {
     extern const char     presets_toml[];
     extern const uint32_t presets_toml_len;  // includes the terminating NUL
