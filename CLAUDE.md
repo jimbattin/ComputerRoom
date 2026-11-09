@@ -91,7 +91,8 @@ ComputerRoom/
 ## Hardware Platform
 
 ### Daisy Seed Specifications
-- **MCU**: STM32H750 (Cortex-M7, 480MHz)
+- **MCU**: STM32H750 (Cortex-M7, 480MHz max; this firmware runs it at 400 MHz via
+  `seed.Init(false)` in `src/board.h`; SDRAM runs at 100 MHz at either clock)
 - **RAM**: 512KB AXI SRAM (the BOOT_SRAM app region, 480KB usable) plus 128KB DTCM, 64KB ITCM,
   288KB D2 and 64KB D3
 - **SDRAM**: 64MB external (48MB allocated to CloudSeed)
@@ -1008,7 +1009,7 @@ Then `make libs` once (and after every submodule update), then `make` (or `make 
 
 ```bash
 # Rebuild all libraries (libcloudseed, DaisySP, libdaisy).
-# Makefile:202-205 runs `clean all` in each, so this is a full rebuild of all three.
+# Makefile:207-210 runs `clean all` in each, so this is a full rebuild of all three.
 make libs
 
 # Or build individually:
@@ -1171,7 +1172,7 @@ Located in `build/<board>/` (`build/terrarium/` or `build/hothouse/`):
 Located in `build/`:
 - **build_id.c** - the generated build id (shared by both boards)
 - **release/cloudseed-terrarium.bin**, **release/cloudseed-hothouse.bin** - `make release`
-  (`Makefile:190-199`) runs `make BOARD=terrarium` then `make BOARD=hothouse` (one after the
+  (`Makefile:197-205`) runs `make BOARD=terrarium` then `make BOARD=hothouse` (one after the
   other: they share `build/build_id.c` and the CloudSeed sub-make) and copies each board's
   `cloudseed.bin` here under a board-specific name, for GitHub release assets
 - **editor.html** - the browser editor as one stand-alone file (`make editor-html`: runs
@@ -1219,7 +1220,8 @@ A Seed running other firmware needs BOOT/RESET (or that firmware's own DFU comma
 **Language**: C++14 (`-std=gnu++14`, `CloudSeed/Makefile:67`)
 **Float flags**: `-ffast-math` on both the app (`Makefile:75`) and the library
 (`CloudSeed/Makefile:106`); the library additionally uses `-fno-exceptions`,
-`-finline-functions`, and `-fno-aggressive-loop-optimizations` (`CloudSeed/Makefile:104-108`)
+`-finline-functions`, `-fno-aggressive-loop-optimizations`, and `-Wdouble-promotion` (an error
+under the library's `-Werror`: audio-rate engine math is float-only) (`CloudSeed/Makefile:104-109`)
 **App type**: `BOOT_SRAM` (`Makefile:6`)
 
 ## Common Modifications

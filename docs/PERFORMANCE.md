@@ -1,9 +1,11 @@
 # CloudSeed/Terrarium Performance Optimizations
 
 This document records the concrete performance and correctness fixes applied to the
-CloudSeed reverb DSP running on the Daisy Seed (STM32H750, Cortex-M7 @ 480MHz, 48-sample
+CloudSeed reverb DSP running on the Daisy Seed (STM32H750, Cortex-M7 at 400 MHz, 48-sample
 audio block, ~1ms budget). Each section names the exact pattern found, the file/line it
-lived at, and the fix applied. No control mapping, preset, or audio topology changed.
+lived at, and the fix applied. No control mapping, preset, or audio topology changed. File/line
+anchors in each section are as of that change; §12 (the engine audit) later removed or moved
+several of the code paths §1-§10 describe.
 
 ## 1. FPU flush-to-zero (denormal stall elimination)
 

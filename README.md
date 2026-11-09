@@ -38,8 +38,8 @@ Just plug into your Seed's USB port and pull up the editor on your browser. Don'
 - Bloom Effecet: You can reverse the gain envelope on multitap delays to increase in volume. Toggled by an assignable switch
 - Scatter: the early taps' levels wander independently (rate 0.1-5 Hz, depth 0-1), toggled by an assignable switch (`early.Scatter`, or Down on the HotHouse `early.envelope` toggle)
 - Delay Lines: Each preset has a default (2) and maximum (4 or 5) number of delay lines, toggled by an assignable switch (on HotHouse also a single line)
-- Some "1khz whine" reduction (We keep the core busy) 
-- General performance improvements to give presets more headroom before crackles show up
+- Some "1khz whine" reduction: the reverb keeps running while bypassed, and on the Terrarium the main loop keeps the core busy (the HotHouse build skips that busy work)
+- General performance improvements to give presets more headroom before crackles show up: float-only engine math and leaner inner loops (about 17 % less CPU on average), and switching a diffusion stage on or off no longer drops audio
 
 # Special Thanks
 [Ghost Note Audio](https://ghostnoteaudio.uk) for their work on [CloudSeed](https://github.com/ValdemarOrn/CloudSeed)
