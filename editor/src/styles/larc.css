@@ -137,6 +137,71 @@ html {
   text-shadow: none;
 }
 
+/* An LED window with a widget (the CPU meter) at its right end. */
+.led.split {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.led-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Pedal CPU load: mean block time as the bar, longest block as the tick. */
+.cpu {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  white-space: pre;
+  color: var(--larc-led);
+  text-shadow: var(--larc-led-glow);
+}
+.cpu.idle {
+  color: var(--larc-led-off);
+  text-shadow: none;
+}
+.cpu-bar {
+  position: relative;
+  width: 5rem;
+  height: 0.45rem;
+  background: var(--larc-led-off);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.cpu-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--larc-led);
+  box-shadow: var(--larc-led-glow);
+  transition: width 0.3s ease-out;
+}
+.cpu-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -2px;
+  background: var(--larc-silk);
+}
+.cpu.xrun {
+  color: var(--larc-edit);
+  text-shadow: 0 0 6px var(--larc-edit);
+}
+.cpu.xrun .cpu-fill {
+  background: var(--larc-edit);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cpu-fill {
+    transition: none;
+  }
+}
+
 /* Form controls rendered as LED windows. */
 .larc input.led,
 .larc select.led {

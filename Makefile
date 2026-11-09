@@ -108,13 +108,13 @@ presets-check: $(BUILD_DIR)/preset_check
 	./$(BUILD_DIR)/preset_check --board hothouse --validate presets_hothouse.toml
 
 # Host unit tests for the host-portable modules (knob/toggle/footswitch state
-# machines, preset parser, USB preset protocol, stored-bank check) and the reverb
-# engine. No firmware build needed.
+# machines, preset parser, USB preset protocol, stored-bank check, CPU load window)
+# and the reverb engine. No firmware build needed.
 HOST_TEST_CXXFLAGS = -std=gnu++14 -O1 -Wall -I. -Isrc -Ithird_party/tomlc99
 HOST_TESTS = $(BUILD_DIR)/knob_bank_test $(BUILD_DIR)/toggle_bank_test \
              $(BUILD_DIR)/footswitch_gestures_test $(BUILD_DIR)/preset_bank_test \
              $(BUILD_DIR)/engine_alloc_test $(BUILD_DIR)/preset_protocol_test \
-             $(BUILD_DIR)/stored_bank_test
+             $(BUILD_DIR)/stored_bank_test $(BUILD_DIR)/cpu_load_test
 
 # The engine test compiles the whole CloudSeed library for the host.
 CLOUDSEED_HOST_SOURCES = $(wildcard CloudSeed/*.cpp CloudSeed/*/*.cpp)
@@ -133,13 +133,15 @@ $(BUILD_DIR)/engine_alloc_test: tests/engine_alloc_test.cpp tests/check.h $(CLOU
 		$(CLOUDSEED_HEADERS) | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/engine_alloc_test.cpp $(CLOUDSEED_HOST_SOURCES)
 $(BUILD_DIR)/preset_protocol_test: tests/preset_protocol_test.cpp tests/check.h src/preset_protocol.cpp \
-		src/preset_protocol.h src/preset_bank.cpp src/preset_bank.h CloudSeed/DelayLineCount.h \
+		src/preset_protocol.h src/cpu_load.h src/preset_bank.cpp src/preset_bank.h CloudSeed/DelayLineCount.h \
 		$(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/preset_protocol_test.cpp src/preset_protocol.cpp \
 		src/preset_bank.cpp $(BUILD_DIR)/toml_host.o
 $(BUILD_DIR)/stored_bank_test: tests/stored_bank_test.cpp tests/check.h src/stored_bank.h \
-		src/preset_protocol.cpp src/preset_protocol.h | $(BUILD_DIR)
+		src/preset_protocol.cpp src/preset_protocol.h src/cpu_load.h | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/stored_bank_test.cpp src/preset_protocol.cpp
+$(BUILD_DIR)/cpu_load_test: tests/cpu_load_test.cpp tests/check.h src/cpu_load.h | $(BUILD_DIR)
+	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ $<
 
 test: $(HOST_TESTS)
 	./$(BUILD_DIR)/knob_bank_test
@@ -149,6 +151,7 @@ test: $(HOST_TESTS)
 	./$(BUILD_DIR)/engine_alloc_test
 	./$(BUILD_DIR)/preset_protocol_test tests/fixtures/two_presets.toml
 	./$(BUILD_DIR)/stored_bank_test
+	./$(BUILD_DIR)/cpu_load_test
 
 .PHONY: test
 

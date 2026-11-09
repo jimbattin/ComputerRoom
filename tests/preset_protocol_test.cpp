@@ -176,9 +176,10 @@ static void testPacker() {
 
 static void testInfo() {
     Fixture fx;
+    fx.proto.SetCurrentPreset(8);
     fx.send(frame(0x01));
     const uint8_t* r = fx.proto.Reply();
-    CHECK(fx.proto.ReplyLength() == 23);
+    CHECK(fx.proto.ReplyLength() == 24);
     CHECK(fx.replyCmd() == 0x41 && fx.status() == 0);
     CHECK(r[6] == kProtocolVersion);
     CHECK(readU21(r + 7) == PresetProtocol::kMaxTextBytes);
@@ -187,7 +188,8 @@ static void testInfo() {
     CHECK(readU21(r + 13) == 1000);
     CHECK(readU32(r + 16) == Fnv1a32(fx.activeText.data(), 1000));
     CHECK(r[21] == 7);
-    CHECK(r[22] == 0xF7);
+    CHECK(r[22] == 8);  // currentPreset
+    CHECK(r[23] == 0xF7);
 }
 
 static void testUpload() {
@@ -650,6 +652,29 @@ static void testDfu() {
     CHECK(fx.status() == (int)UploadStatus::BadFrame);
 }
 
+// LOAD reports the last SetLoad() as three u14 fields; it is not a session message.
+static void testLoad() {
+    Fixture fx;
+    CHECK(fx.send(frame(0x09)) == UploadAction::None);
+    CHECK(fx.replyCmd() == 0x49 && fx.status() == 0 && fx.proto.ReplyLength() == 13);
+    const uint8_t* r = fx.proto.Reply();
+    CHECK(readU14(r + 6) == 0 && readU14(r + 8) == 0 && readU14(r + 10) == 0);
+
+    fx.proto.SetLoad(CpuLoad{612, 1043, 3});
+    const std::string text = makeText(500);
+    fx.begin(500, Fnv1a32(text.data(), 500), 0);
+    fx.send(frame(0x09), 4000);
+    r = fx.proto.Reply();
+    CHECK(readU14(r + 6) == 612 && readU14(r + 8) == 1043 && readU14(r + 10) == 3);
+    fx.proto.Tick(5000);
+    CHECK(!fx.proto.SessionActive());  // the session timer was not refreshed
+
+    Bytes f = frame(0x09);
+    f.push_back(0x00);
+    CHECK(fx.send(f) == UploadAction::None);
+    CHECK(fx.status() == (int)UploadStatus::BadFrame);
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) {
         fprintf(stderr, "usage: %s tests/fixtures/two_presets.toml\n", argv[0]);
@@ -675,6 +700,7 @@ int main(int argc, char** argv) {
     testAssemblerBurst();
     testIdentity();
     testDfu();
+    testLoad();
     testEndToEnd(argv[1]);
     return CheckSummary("preset_protocol_test");
 }

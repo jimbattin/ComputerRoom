@@ -12,6 +12,7 @@ talks raw MIDI bytes to the ALSA rawmidi node /dev/snd/midiC<card>D0.
   usb_preset_host.py [--dev PATH] flood SECONDS   # INFO every 2 ms + READ-all loop, no session
   usb_preset_host.py [--dev PATH] identity        # MIDI Identity Request -> build id
   usb_preset_host.py [--dev PATH] dfu             # restart into the Daisy bootloader (DFU)
+  usb_preset_host.py [--dev PATH] load            # audio callback load over the last second
   usb_preset_host.py fnv FILE
 """
 import os, select, sys, time
@@ -101,6 +102,8 @@ def info(link, quiet=False):
     st, b = link.call(0x01)
     d = dict(version=b[0], maxTextBytes=g21(b[1:]), chunkBytes=g14(b[4:]), source=b[6],
              activeLength=g21(b[7:]), activeHash=g32(b[10:]), presetCount=b[15])
+    if len(b) > 16:  # absent in firmware from before currentPreset was added
+        d["currentPreset"] = b[16]
     if not quiet:
         show("INFO", st, " ".join(f"{k}={v:#010x}" if k == "activeHash" else f"{k}={v}"
                                   for k, v in d.items()))
@@ -192,6 +195,11 @@ def main():
     elif cmd == "dfu":
         show("DFU", link.call(0x08)[0])
         print("the pedal restarts into DFU mode; flash with: make program-dfu")
+    elif cmd == "load":
+        st, b = link.call(0x09)
+        if st != 0:
+            sys.exit(f"LOAD: {STATUS[st]}")
+        print(f"LOAD: avg {g14(b) / 10:.1f}% max {g14(b[2:]) / 10:.1f}% overruns {g14(b[4:])}")
     else:
         sys.exit(__doc__)
 

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useReducer, useState } from "preact/hooks";
+import { useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
+import { CpuMeter } from "./components/CpuMeter";
 import { ConfirmDialog, Key, Led } from "./components/controls";
 import { DevicePanel } from "./components/DevicePanel";
 import { FlowPanel } from "./components/FlowPanel";
@@ -6,7 +7,7 @@ import { ProgramKeys } from "./components/ProgramKeys";
 import { KnobMapPage, PageKeys, ParamPage, SetupPage, ToggleMapPage } from "./components/pages";
 import { openTomlFile, projectPresets, saveTomlFile } from "./io/files";
 import { PresetLink } from "./midi/client";
-import { fnv1a32, type Identity, type InfoReply, ProtocolError } from "./midi/protocol";
+import { fnv1a32, type Identity, type InfoReply, type LoadReply, ProtocolError } from "./midi/protocol";
 import { connectPedal, isWebMidiSupported } from "./midi/webMidi";
 import { docText, loadBank } from "./model/bank";
 import { BLOCKS, type BlockId } from "./model/flow";
@@ -21,6 +22,9 @@ interface Confirm {
 }
 
 const pct = (done: number, total: number) => Math.floor((done * 100) / Math.max(total, 1));
+
+/** How often the CPU meter asks the pedal for its load; the pedal publishes once a second. */
+const LOAD_POLL_MS = 1000;
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -39,6 +43,34 @@ export function App() {
   /** Block last clicked in the flow diagram; cleared by a page key. */
   const [flowPin, setFlowPin] = useState<BlockId | null>(null);
   const supported = useMemo(isWebMidiSupported, []);
+  /** The pedal's audio load over the last second; null while unknown. */
+  const [cpuLoad, setCpuLoad] = useState<LoadReply | null>(null);
+  const busyRef = useRef(false);
+  busyRef.current = busy;
+
+  // CPU meter: poll LOAD while linked and idle. PresetLink queues requests, so a poll in
+  // flight when an operation starts only delays that operation's first request. Firmware
+  // without LOAD (BadFrame) or a lost reply leaves the meter dimmed.
+  useEffect(() => {
+    setCpuLoad(null);
+    if (!connected || !link) return;
+    let stopped = false;
+    const poll = async () => {
+      if (busyRef.current) return;
+      try {
+        const next = await link.load();
+        if (!stopped) setCpuLoad(next);
+      } catch {
+        if (!stopped) setCpuLoad(null);
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), LOAD_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [connected, link]);
 
   const dirty = isDirty(state);
   const { doc, presets, selected, page } = state;
@@ -133,27 +165,55 @@ export function App() {
     dispatch({ type: "saved", text, fileName: state.fileName });
   };
 
+  /**
+   * Opens the pedal's MIDI ports and identifies it. INFO must answer, so a Daisy running other
+   * firmware is refused rather than linked.
+   */
+  async function linkPedal(): Promise<{ link: PresetLink; board: Board }> {
+    setConnected(false);
+    setInfo(null);
+    setIdentity(null);
+    const next = new PresetLink(await connectPedal());
+    const id = await next.identify();
+    setInfo(await next.info());
+    setIdentity(id);
+    setProjectBoard(id.board);
+    setLink(next);
+    setConnected(true);
+    return { link: next, board: id.board };
+  }
+
   const onConnect = () =>
     run(async () => {
-      setConnected(false);
-      setInfo(null);
-      setIdentity(null);
-      const next = new PresetLink(await connectPedal());
-      const id = await next.identify();
-      setInfo(await next.info());
-      setIdentity(id);
-      setProjectBoard(id.board);
-      setLink(next);
-      setConnected(true);
+      await linkPedal();
     });
+
+  /** READs the bank the pedal is playing and opens it on the preset that is playing. */
+  async function readPedal(from: PresetLink, board: Board | undefined) {
+    const text = await from.readAll((d, t) => setStatus(`READ ${pct(d, t)}%`));
+    load(text, "pedal", null, board);
+    const after = await from.info();
+    setInfo(after);
+    // Firmware from before INFO carried currentPreset leaves the first preset selected.
+    if (after.currentPreset !== null) dispatch({ type: "select", preset: after.currentPreset });
+    setStatus(null);
+  }
+
+  // On open: link the pedal and load the bank it is playing. Without a pedal (or Web MIDI) this
+  // leaves the usual status and the editor starts empty, as before.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once, on mount
+  useEffect(() => {
+    if (!supported) return;
+    void run(async () => {
+      const { link: next, board } = await linkPedal();
+      await readPedal(next, board);
+    });
+  }, []);
 
   const onRead = () =>
     run(async () => {
       if (!link || !(await discardOk())) return;
-      const text = await link.readAll((d, t) => setStatus(`READ ${pct(d, t)}%`));
-      load(text, "pedal", null, pedalBoard ?? undefined);
-      setInfo(await link.info());
-      setStatus(null);
+      await readPedal(link, pedalBoard ?? undefined);
     });
 
   const onUpload = () =>
@@ -221,7 +281,9 @@ export function App() {
             text={
               [dirty ? "EDITED" : "", origin, doc ? state.board.toUpperCase() : ""].filter(Boolean).join("  ") || "-"
             }
-          />
+          >
+            <CpuMeter load={connected ? cpuLoad : null} />
+          </Led>
         </div>
         <DevicePanel
           supported={supported}
@@ -316,7 +378,8 @@ export function App() {
         </>
       ) : (
         <p class="hint">
-          Load the project presets.toml (pick the board first), open a file, or connect the pedal and READ.
+          The pedal is read automatically when it is connected at page load. Otherwise load the project presets.toml
+          (pick the board first), open a file, or connect the pedal and READ.
         </p>
       )}
 

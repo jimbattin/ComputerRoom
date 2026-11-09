@@ -266,6 +266,19 @@ move a lever away from its position and back to make it write.
 8. `$H upload presets.toml` (the Terrarium bank). Pass: COMMIT prints `ParseError … bank is for
    board "terrarium", this pedal is "hothouse"`, nothing reboots, `$H info` is unchanged.
 
+### H16. CPU load (LOAD)
+
+HotHouse build, audio playing, not bypassed.
+
+1. Preset 1 (Chorus), default toggles: `$H load` a few times, a second apart. Pass: `LOAD: avg
+   ... max ... overruns 0`, with avg roughly 70-80 % (measured 2026-11-08: about 77 %, max
+   about 88 %) and max above avg but at most 100 %.
+2. Open the editor and connect. Pass: the CPU meter at the right of the header's small LED
+   shows the same average and peak as `$H load` (within a few per cent; both read the same
+   one-second window) and no `XRUN`.
+3. Preset 9, "Through the Looking Glass", toggle 1 Up (`max_delay_lines`), 30 s. Pass: `$H load`
+   reports `overruns 0` every time and the editor's meter never shows `XRUN`.
+
 ## Results log
 
 Copy one row per validated revision.

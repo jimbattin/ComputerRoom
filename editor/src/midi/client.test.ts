@@ -21,6 +21,11 @@ class FakePedal implements MidiTransport {
   /** Identity Reply member code; null: firmware that does not answer the Identity Request. */
   member: number | null = 0;
   buildId = "abc1234";
+  /** LOAD reply fields: avg, max (per mille), overruns; null: firmware without LOAD. */
+  load: number[] | null = [612, 1043, 3];
+  /** Frames that arrived while the previous one was still unanswered: the pedal drops them. */
+  overlapped = 0;
+  private answering = false;
   private subscribers = new Set<(msg: Uint8Array) => void>();
   private session: { length: number; hash: number; received: number[]; nextSeq: number } | null = null;
 
@@ -70,6 +75,12 @@ class FakePedal implements MidiTransport {
       return;
     }
     expect([...msg.slice(1, 4)]).toEqual([...HEADER]);
+    // The pedal latches one frame at a time (SysExAssembler): a frame arriving before the
+    // previous one is answered is lost.
+    if (this.answering) {
+      this.overlapped++;
+      return;
+    }
     const cmd = msg[4]!;
     const body = msg.slice(5, -1);
     const [status, reply] = this.handle(cmd, body);
@@ -78,7 +89,9 @@ class FakePedal implements MidiTransport {
       return;
     }
     const frame = Uint8Array.from([0xf0, ...HEADER, cmd | 0x40, status, ...reply, 0xf7]);
+    this.answering = true;
     queueMicrotask(() => {
+      this.answering = false;
       for (const cb of this.subscribers) cb(frame);
     });
   }
@@ -129,6 +142,8 @@ class FakePedal implements MidiTransport {
       case CMD.ABORT:
         this.session = null;
         return [0, []];
+      case CMD.LOAD:
+        return this.load ? [0, this.load.flatMap((v) => u14(v))] : [1, []];
       default:
         return [1, []];
     }
@@ -225,5 +240,25 @@ describe("PresetLink", () => {
     pedal.staleAfterReboot = true;
     expect(await new PresetLink(pedal, { replyTimeoutMs: 20 }).upload(fixture)).toBeNull();
     expect(decode(pedal.text)).toBe(fixture);
+  });
+
+  it("decodes LOAD", async () => {
+    const pedal = new FakePedal(builtIn);
+    expect(await new PresetLink(pedal).load()).toEqual({ avgPermille: 612, maxPermille: 1043, overruns: 3 });
+  });
+
+  it("queues a LOAD poll behind a read in progress instead of overlapping it", async () => {
+    const pedal = new FakePedal(fixture);
+    const link = new PresetLink(pedal, { replyTimeoutMs: 50 });
+    const [text, load] = await Promise.all([link.readAll(), link.load()]);
+    expect(text).toBe(fixture);
+    expect(load.avgPermille).toBe(612);
+    expect(pedal.overlapped).toBe(0);
+  });
+
+  it("reports LOAD on firmware without it as BadFrame", async () => {
+    const pedal = new FakePedal(builtIn);
+    pedal.load = null;
+    await expect(new PresetLink(pedal).load()).rejects.toThrow("LOAD: BadFrame");
   });
 });

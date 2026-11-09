@@ -11,7 +11,9 @@
 // u32 = 5 bytes (the fifth carries bits 28-31). Hash: 32-bit FNV-1a over the text.
 //
 //   0x01 INFO    -> version, maxTextBytes u21, chunkBytes u14, source (0 built-in,
-//                   1 uploaded), activeLength u21, activeHash u32, presetCount
+//                   1 uploaded), activeLength u21, activeHash u32, presetCount,
+//                   currentPreset (0-based index of the preset playing; absent in older
+//                   firmware, whose reply ends after presetCount)
 //   0x02 BEGIN   length u21, hash u32        starts (or restarts) a session
 //   0x03 DATA    seq u14, 1..240 text bytes  -> seq u14; seq == last accepted is re-ACKed
 //   0x04 COMMIT  checks length, hash, parser; stores to QSPI and reboots after Ok;
@@ -21,6 +23,10 @@
 //   0x07 ABORT   ends the session
 //   0x08 DFU     -> Ok; the pedal then restarts into the Daisy bootloader's DFU mode
 //                   (no timeout), ready for `make program-dfu`. Older firmware: BadFrame.
+//   0x09 LOAD    -> avg u14, max u14, overruns u14: the audio callback's load over the
+//                   last second (cpu_load.h): mean and longest block in per mille of the
+//                   1 ms block period, and how many blocks overran it. Not a session
+//                   message. Older firmware: BadFrame.
 //
 // Identity Request (Universal Non-Real-Time, any device id 00-7F): F0 7E <id> 06 01 F7
 // Identity Reply: F0 7E 7F 06 02 7D 43 53 <member> 00 00 00 00 00 <build id> F7
@@ -36,6 +42,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include "cpu_load.h"
 
 constexpr uint8_t kSysExManufacturer = 0x7D, kSysExTag0 = 0x43, kSysExTag1 = 0x53;
 constexpr uint8_t kProtocolVersion   = 1;
@@ -103,6 +111,8 @@ public:
     UploadAction Handle(const uint8_t* frame, size_t len, uint32_t nowMs);
     void Finish(UploadAction action, bool ok);
     void Tick(uint32_t nowMs);  // ends a session idle for kSessionTimeoutMs
+    void SetLoad(const CpuLoad& load) { load_ = load; }  // what LOAD reports
+    void SetCurrentPreset(int index) { currentPreset_ = index; }  // what INFO reports
     bool SessionActive() const { return session_; }
     const ActiveBank& Active() const { return active_; }  // as passed to Init()
     const uint8_t* Reply() const { return reply_; }
@@ -126,6 +136,8 @@ private:
     const char*   buildId_  = nullptr;
     uint8_t       board_    = 0;
     bool          session_  = false;
+    CpuLoad       load_     = {};
+    int           currentPreset_ = 0;
     uint32_t      expectedLength_ = 0;
     uint32_t      expectedHash_   = 0;
     uint32_t      received_       = 0;

@@ -13,11 +13,31 @@ export const hoverHandlers = (key: string, onHover: (key: string | null) => void
   onFocusOut: () => onHover(null),
 });
 
-export function Led({ text, wide, small, off }: { text: string; wide?: boolean; small?: boolean; off?: boolean }) {
-  const cls = ["led", wide && "wide", small && "small", off && "off"].filter(Boolean).join(" ");
+/** An LED window. `children` (e.g. a meter) sit at its right end, after the text. */
+export function Led({
+  text,
+  wide,
+  small,
+  off,
+  children,
+}: {
+  text: string;
+  wide?: boolean;
+  small?: boolean;
+  off?: boolean;
+  children?: ComponentChildren;
+}) {
+  const cls = ["led", wide && "wide", small && "small", off && "off", children && "split"].filter(Boolean).join(" ");
   return (
     <div class={cls} title={text}>
-      {text}
+      {children ? (
+        <>
+          <span class="led-text">{text}</span>
+          {children}
+        </>
+      ) : (
+        text
+      )}
     </div>
   );
 }

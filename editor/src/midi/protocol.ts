@@ -3,7 +3,7 @@
 
 import type { Board } from "../model/schema";
 
-export const CMD = { INFO: 1, BEGIN: 2, DATA: 3, COMMIT: 4, REVERT: 5, READ: 6, ABORT: 7 } as const;
+export const CMD = { INFO: 1, BEGIN: 2, DATA: 3, COMMIT: 4, REVERT: 5, READ: 6, ABORT: 7, LOAD: 9 } as const;
 
 export const CMD_NAMES: Record<number, string> = Object.fromEntries(
   Object.entries(CMD).map(([name, value]) => [value, name]),
@@ -73,11 +73,13 @@ export interface InfoReply {
   activeLength: number;
   activeHash: number;
   presetCount: number;
+  /** 0-based index of the preset the pedal is playing; null from firmware that predates it. */
+  currentPreset: number | null;
 }
 
 const INFO_BYTES = 16;
 
-// Offsets as in tools/usb_preset_host.py info().
+// Offsets as in tools/usb_preset_host.py info(). currentPreset (byte 16) is a later addition.
 export function decodeInfo(b: Uint8Array): InfoReply {
   if (b.length < INFO_BYTES) throw new ProtocolError(`INFO: ${b.length}-byte reply, expected ${INFO_BYTES}`);
   return {
@@ -88,7 +90,25 @@ export function decodeInfo(b: Uint8Array): InfoReply {
     activeLength: getU21(b, 7),
     activeHash: getU32(b, 10),
     presetCount: b[15]!,
+    currentPreset: b.length > INFO_BYTES ? b[INFO_BYTES]! : null,
   };
+}
+
+/** LOAD (0x09): the pedal's audio callback load over the last second. */
+export interface LoadReply {
+  /** Mean block time, per mille of the 1 ms block period. */
+  avgPermille: number;
+  /** Longest block, per mille of the block period. */
+  maxPermille: number;
+  /** Blocks that took longer than the block period (audio dropouts). */
+  overruns: number;
+}
+
+const LOAD_BYTES = 6;
+
+export function decodeLoad(b: Uint8Array): LoadReply {
+  if (b.length < LOAD_BYTES) throw new ProtocolError(`LOAD: ${b.length}-byte reply, expected ${LOAD_BYTES}`);
+  return { avgPermille: getU14(b, 0), maxPermille: getU14(b, 2), overruns: getU14(b, 4) };
 }
 
 export class ProtocolError extends Error {

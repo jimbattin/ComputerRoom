@@ -204,7 +204,10 @@ Using it:
   next to PROJECT picks presets.toml (TERRARIUM) or presets_hothouse.toml (HOTHOUSE); while a
   pedal is connected it is locked to the pedal's board. **SAVE** downloads the bank. Where the
   file lands is set by the browser's download setting ("ask where to save" lets you overwrite
-  the file). The header LED shows the loaded bank's board.
+  the file). The header LED shows the loaded bank's board, and at its right end a CPU meter:
+  the pedal's audio load over the last second (bar = average, tick = longest 1 ms block,
+  `XRUN` when a block overran and the audio dropped out). It is dim while no pedal is linked or
+  the firmware predates the LOAD command.
 - **CONNECT** sends the MIDI Identity Request. The device panel shows the pedal's board and
   build id; no reply means a Terrarium (older firmware). It also shows the pedal's active bank
   (source, preset count, length, hash, and whether it matches the loaded bank); **READ** loads
@@ -212,8 +215,9 @@ Using it:
   built-in bank. Both reboot the pedal and erase the sounds saved on it. UPLOAD refuses a bank
   whose `board` differs from the linked pedal's, with the pedal's own message; that bank can
   still be opened and edited. With no pedal linked, a bank is checked against its own `board`
-  key (missing or unknown is checked as terrarium). Firefox asks for MIDI permission on the
-  first CONNECT.
+  key (missing or unknown is checked as terrarium). When the page opens, the editor connects on
+  its own and READs the pedal's active bank; with no pedal (or other firmware on the Daisy) it
+  starts empty and shows why. Browsers ask for MIDI permission on that first connection.
 - Program keys 01-16 select a preset. **DUP** appends a copy at the end, and **DEL** removes
   one; there is no reordering. The page keys show faders with the engine's real units, the
   knob and toggle maps, and the name, LED and delay-line settings. On the KNOBS and SWITCH

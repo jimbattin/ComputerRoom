@@ -9,8 +9,6 @@ const mainLed = (container: Element) => container.querySelector(".led.wide")!.te
 describe("App", () => {
   it("loads the project bank and edits a fader", async () => {
     const { container } = render(<App />);
-    expect(screen.getByText(/Load the project presets.toml/)).toBeTruthy();
-
     fireEvent.click(screen.getByRole("button", { name: "PROJECT" }));
     await waitFor(() => expect(mainLed(container)).toMatch(/^P01 /));
     expect(mainLed(container)).toBe("P01 CHORUS");

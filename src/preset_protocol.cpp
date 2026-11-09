@@ -14,7 +14,8 @@ constexpr size_t   PresetProtocol::kMaxBuildId;
 namespace {
 
 constexpr uint8_t kCmdInfo = 0x01, kCmdBegin = 0x02, kCmdData = 0x03, kCmdCommit = 0x04,
-                  kCmdRevert = 0x05, kCmdRead = 0x06, kCmdAbort = 0x07, kCmdDfu = 0x08;
+                  kCmdRevert = 0x05, kCmdRead = 0x06, kCmdAbort = 0x07, kCmdDfu = 0x08,
+                  kCmdLoad = 0x09;
 constexpr uint8_t kReplyFlag  = 0x40;
 constexpr size_t  kHeaderLen  = 4;    // 7D 43 53 <cmd>
 constexpr size_t  kMaxErrText = 200;  // ParseError body cap
@@ -167,6 +168,7 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         putU21(active_.length);
         putU32(active_.hash);
         put(static_cast<uint8_t>(active_.presetCount & 0x7F));
+        put(static_cast<uint8_t>(currentPreset_ & 0x7F));
         endReply();
         return UploadAction::None;
 
@@ -276,6 +278,15 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         if (n != 0) break;
         reply(cmd, UploadStatus::Ok);
         return UploadAction::Dfu;
+
+    case kCmdLoad:
+        if (n != 0) break;
+        beginReply(cmd, UploadStatus::Ok);
+        putU14(load_.avgPermille);
+        putU14(load_.maxPermille);
+        putU14(load_.overruns);
+        endReply();
+        return UploadAction::None;
 
     default:
         break;

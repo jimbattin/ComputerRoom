@@ -3,12 +3,14 @@ import {
   CMD,
   CMD_NAMES,
   decodeInfo,
+  decodeLoad,
   fnv1a32,
   getU14,
   getU21,
   IDENTITY_REQUEST,
   type Identity,
   type InfoReply,
+  type LoadReply,
   ProtocolError,
   parseIdentityReply,
   parseReply,
@@ -42,11 +44,16 @@ export interface LinkOptions {
 
 export type Progress = (done: number, total: number) => void;
 
-/** Stop-and-wait client for protocol v1: one request in flight at a time. */
+/**
+ * Stop-and-wait client for protocol v1: one request in flight at a time. Requests are queued,
+ * so the periodic LOAD poll can never overlap another operation's request (the pedal latches
+ * one frame at a time and would drop the second).
+ */
 export class PresetLink {
   private readonly replyTimeoutMs: number;
   private readonly commitTimeoutMs: number;
   private readonly revertTimeoutMs: number;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly transport: MidiTransport,
@@ -57,11 +64,18 @@ export class PresetLink {
     this.revertTimeoutMs = opts.revertTimeoutMs ?? 5000;
   }
 
+  /** Queues one request behind any in flight; see send(). */
+  private call(cmd: number, body: number[] = [], timeoutMs = this.replyTimeoutMs): Promise<Reply> {
+    const next = this.queue.then(() => this.send(cmd, body, timeoutMs));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
   /**
    * Sends one request and resolves with its reply. DATA and READ replies must echo the
    * request's seq/index, so a late reply to an earlier resend is never taken for this one.
    */
-  private async call(cmd: number, body: number[] = [], timeoutMs = this.replyTimeoutMs): Promise<Reply> {
+  private async send(cmd: number, body: number[], timeoutMs: number): Promise<Reply> {
     const name = CMD_NAMES[cmd];
     const echo = cmd === CMD.DATA || cmd === CMD.READ ? getU14(body, 0) : null;
     // INFO, READ and DATA are answered identically when repeated (docs/USB_MIDI.md section 10).
@@ -130,6 +144,11 @@ export class PresetLink {
 
   async info(): Promise<InfoReply> {
     return decodeInfo((await this.call(CMD.INFO)).body);
+  }
+
+  /** The audio callback's load over the last second; firmware without LOAD replies BadFrame. */
+  async load(): Promise<LoadReply> {
+    return decodeLoad((await this.call(CMD.LOAD)).body);
   }
 
   /** The active bank's text, checked against INFO's activeHash. */
