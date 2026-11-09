@@ -38,12 +38,18 @@ export const SEED_SCALE = 1e6;
 /** The engine's integer seed for a normalized seed parameter. */
 export const seedOf = (norm: number): number => Math.floor(norm * SEED_SCALE + 0.001);
 
+/**
+ * Active delay lines for a delay_lines.max / .select value, as updateEngineControls() in
+ * src/cloudseed.cpp selects them.
+ */
+export function activeLines(key: string, v: number, preset: LineCounts): number {
+  if (key === "delay_lines.select") return v === 0 ? 1 : v === 1 ? preset.maxDelayLines : preset.defaultDelayLines;
+  return isOn(v) ? preset.maxDelayLines : preset.defaultDelayLines;
+}
+
 /** The engine's reading of `norm` for parameter `key` ('group.Name'), as panel text. */
 export function formatValue(key: string, v: number, preset: LineCounts): string {
-  if (key === "delay_lines.max") return `${isOn(v) ? preset.maxDelayLines : preset.defaultDelayLines}LN`;
-  if (key === "delay_lines.select") {
-    return `${v === 0 ? 1 : v === 1 ? preset.maxDelayLines : preset.defaultDelayLines}LN`;
-  }
+  if (key.startsWith("delay_lines.")) return `${activeLines(key, v, preset)}LN`;
   if (key === "reverse.delay") return `${Math.round(20 + table(v, "3oct") * 1980)}ms`;
   if (PARAMS[key]?.kind === "switch") return isOn(v) ? "ON" : "OFF";
 

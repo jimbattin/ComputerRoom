@@ -1,6 +1,5 @@
 import { useState } from "preact/hooks";
-import type { Preset } from "../model/bank";
-import { MAX_PRESETS } from "../model/bank";
+import { MAX_PRESETS, type Preset } from "../model/bank";
 import type { PresetChanges } from "../model/state";
 import { ConfirmDialog, Key } from "./controls";
 

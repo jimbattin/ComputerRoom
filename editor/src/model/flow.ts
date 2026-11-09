@@ -1,4 +1,5 @@
 import type { Preset } from "./bank";
+import { activeLines } from "./scale";
 import { isOn, PAGES, type PageId } from "./schema";
 
 /**
@@ -306,10 +307,10 @@ export function blocksOfKey(key: string): BlockId[] {
   return BLOCK_IDS.filter((id) => keys.some((k) => BLOCKS[id].keys.includes(k)));
 }
 
-// Every PARAM_KEYS key except the other board's delay_lines key is present in preset.params:
-// loadBank() rejects a preset missing one.
-
-/** Whether the block is in the signal path with the preset's stored switch states. */
+/**
+ * Whether the block is in the signal path with the preset's stored switch states. Every key a
+ * block reads is in preset.params: loadBank() rejects a preset missing one.
+ */
 export function blockOn(id: BlockId, preset: Preset): boolean {
   const p = preset.params;
   if (id === "revInto") return isOn(p["reverse.enabled"]!) && !isOn(p["reverse.direct_mix"]!);
@@ -318,11 +319,10 @@ export function blockOn(id: BlockId, preset: Preset): boolean {
   return enable === undefined || isOn(p[enable]!);
 }
 
-/** Active delay lines, as updateEngineControls() in src/cloudseed.cpp selects them. */
+/** Active delay lines with the preset's stored delay-line state. */
 export function lineCount(preset: Preset): number {
-  const select = preset.params["delay_lines.select"];
-  if (select !== undefined) return select === 0 ? 1 : select === 1 ? preset.maxDelayLines : preset.defaultDelayLines;
-  return isOn(preset.params["delay_lines.max"]!) ? preset.maxDelayLines : preset.defaultDelayLines;
+  const key = "delay_lines.select" in preset.params ? "delay_lines.select" : "delay_lines.max";
+  return activeLines(key, preset.params[key]!, preset);
 }
 
 /** Blocks a page edits, unique, in order of first appearance. */

@@ -1,5 +1,5 @@
 import type { Dispatch } from "preact/hooks";
-import { formatNorm, MAX_NAME_BYTES, type Preset, TOTAL_LINE_COUNT } from "../model/bank";
+import { formatNorm, MAX_NAME_BYTES, type Preset } from "../model/bank";
 import { badgesFor, presentKeys } from "../model/flow";
 import { formatValue } from "../model/scale";
 import {
@@ -20,6 +20,7 @@ import {
   type ScalarField,
   SETUP_FIELDS,
   sanitizeName,
+  scalarRange,
 } from "../model/state";
 import { hoverHandlers, Key, NumberField, withOriginal } from "./controls";
 import { Fader, SwitchStrip, ThreeWayStrip } from "./Fader";
@@ -241,22 +242,26 @@ export function SetupPage({ preset, changes, dispatch }: PageProps) {
   /** Tooltip naming the loaded / saved value, present only when the field was edited. */
   const was = (prop: (typeof SETUP_FIELDS)[number]) =>
     changes.fields[prop] ? `Original: ${changes.original[prop]}` : undefined;
-  const scalar = (field: ScalarField, label: string, min: number, max: number, step = 1) => (
-    <label class="silk" title={was(SCALAR_PROP[field])}>
-      {changes.fields[SCALAR_PROP[field]] && <span class="edit-mark" />}
-      {label}
-      <NumberField
-        class="led"
-        label={label}
-        value={preset[SCALAR_PROP[field]]}
-        min={min}
-        max={max}
-        step={step}
-        display={String}
-        onCommit={(v) => dispatch({ type: "setScalar", field, value: v })}
-      />
-    </label>
-  );
+  const scalar = (field: ScalarField, label: string, step = 1) => {
+    const prop = SCALAR_PROP[field];
+    const [min, max] = scalarRange(field, preset);
+    return (
+      <label class="silk" title={was(prop)}>
+        {changes.fields[prop] && <span class="edit-mark" />}
+        {label}
+        <NumberField
+          class="led"
+          label={label}
+          value={preset[prop]}
+          min={min}
+          max={max}
+          step={step}
+          display={String}
+          onCommit={(v) => dispatch({ type: "setScalar", field, value: v })}
+        />
+      </label>
+    );
+  };
   return (
     <div class="setup-grid">
       <label class="silk" title={was("name")}>
@@ -276,12 +281,12 @@ export function SetupPage({ preset, changes, dispatch }: PageProps) {
           }}
         />
       </label>
-      {scalar("blinks", "Blinks", 1, 20)}
-      {scalar("led_on_ms", "LED on ms", 0, 60000, 10)}
-      {scalar("led_off_ms", "LED off ms", 0, 60000, 10)}
-      {scalar("led_pause_ms", "LED pause ms", 0, 60000, 10)}
-      {scalar("default_delay_lines", "Default lines", 1, Math.min(TOTAL_LINE_COUNT, preset.maxDelayLines))}
-      {scalar("max_delay_lines", "Max lines", Math.max(1, preset.defaultDelayLines), TOTAL_LINE_COUNT)}
+      {scalar("blinks", "Blinks")}
+      {scalar("led_on_ms", "LED on ms", 10)}
+      {scalar("led_off_ms", "LED off ms", 10)}
+      {scalar("led_pause_ms", "LED pause ms", 10)}
+      {scalar("default_delay_lines", "Default lines")}
+      {scalar("max_delay_lines", "Max lines")}
     </div>
   );
 }

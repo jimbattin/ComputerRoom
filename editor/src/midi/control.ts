@@ -2,7 +2,7 @@
 // encoders and the decoder for the pedal's reports. Mirrors src/midi_control.cpp; the table
 // order and numbers must match kMidiControls. Pure: no browser APIs.
 
-import { type Board, delayLinesKey, isOn, PARAMS } from "../model/schema";
+import { type Board, delayLinesKey, isOn, PARAMS, snapSelect3 } from "../model/schema";
 
 /**
  * Every control in kMidiControls order. The NRPN number is the CC number (NRPN MSB 0). The
@@ -72,8 +72,8 @@ export const paramKey = (key: string, board: Board): string =>
   key === "delay_lines" ? `delay_lines.${delayLinesKey(board)}` : key;
 
 const BY_KEY = new Map<string, number>(MIDI_CONTROLS.map((c) => [c.key, c.number]));
-BY_KEY.set("delay_lines.max", 77);
-BY_KEY.set("delay_lines.select", 77);
+for (const board of ["terrarium", "hothouse"] as const)
+  BY_KEY.set(paramKey("delay_lines", board), BY_KEY.get("delay_lines")!);
 const BY_NUMBER = new Map(MIDI_CONTROLS.map((c) => [c.number, c]));
 
 /** The control number of a preset param key, or undefined when it has none. */
@@ -90,15 +90,30 @@ export const toQ = (v: number): number => Math.round(clamp01(v) * Q_MAX);
 /** Exactly the pedal's NormFromQ14(): the float32 nearest q / 16383. */
 export const fromQ = (q: number): number => Math.fround(q / Q_MAX);
 
+/** An on/off control (or Engage) at 14 bits: on from 8192, as the pedal's NormFromQ14() >= 0.5. */
+export const isOnQ = (q: number): boolean => q >= 8192;
+
 /** The 14-bit value the editor sends for `v` of param `key` (not engage). */
 export function qFor(key: string, v: number): number {
   switch (PARAMS[key]?.kind) {
     case "switch":
       return isOn(v) ? Q_MAX : 0;
     case "select3":
-      return toQ(Math.round(v * 2) / 2);
+      return toQ(snapSelect3(v));
     default:
       return toQ(v);
+  }
+}
+
+/** The value the pedal stores for param `key` when it receives `q`: 0 / 1 for a switch, 0 / 0.5 / 1 for select3. */
+export function normFromQ(key: string, q: number): number {
+  switch (PARAMS[key]?.kind) {
+    case "switch":
+      return isOnQ(q) ? 1 : 0;
+    case "select3":
+      return snapSelect3(fromQ(q));
+    default:
+      return fromQ(q);
   }
 }
 
@@ -106,9 +121,9 @@ export function qFor(key: string, v: number): number {
 export function sameAt14(key: string, v: number, q: number): boolean {
   switch (PARAMS[key]?.kind) {
     case "switch":
-      return isOn(v) === q >= 8192;
+      return isOn(v) === isOnQ(q);
     case "select3":
-      return Math.round(v * 2) === Math.round(fromQ(q) * 2);
+      return snapSelect3(v) === snapSelect3(fromQ(q));
     default:
       return toQ(v) === q;
   }

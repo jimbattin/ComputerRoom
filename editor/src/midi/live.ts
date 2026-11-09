@@ -4,7 +4,17 @@
 
 import type { Board } from "../model/schema";
 import type { PresetLink } from "./client";
-import { controlByNumber, ENGAGE_NUMBER, type LiveEvent, numberOf, paramKey, qFor, sameAt14 } from "./control";
+import {
+  controlByNumber,
+  ENGAGE_NUMBER,
+  isOnQ,
+  type LiveEvent,
+  numberOf,
+  paramKey,
+  Q_MAX,
+  qFor,
+  sameAt14,
+} from "./control";
 
 /** A report of a control the editor sent less than this long ago is its own echo. */
 export const LIVE_ECHO_MS = 300;
@@ -23,7 +33,7 @@ export class LiveSync {
   private preset: number | null = null;
   private gen = 0;
   /** While selectPreset runs: the pedal's reports for the newly loaded preset. */
-  private sync: { reports: Map<string, number> } | null = null;
+  private reports: Map<string, number> | null = null;
 
   constructor(
     private readonly link: PresetLink,
@@ -51,18 +61,18 @@ export class LiveSync {
   private handle(ev: LiveEvent): void {
     if (ev.type === "program") {
       this.preset = ev.program;
-      if (!this.sync) this.cb.onPedalPreset(ev.program);
+      if (!this.reports) this.cb.onPedalPreset(ev.program);
       return;
     }
     const control = controlByNumber(ev.number);
     if (!control) return;
     if (control.key === "engage") {
-      if (!this.recent("engage")) this.cb.onBypass(ev.q < 8192);
+      if (!this.recent("engage")) this.cb.onBypass(!isOnQ(ev.q));
       return;
     }
     const key = paramKey(control.key, this.board);
-    if (this.sync) {
-      this.sync.reports.set(key, ev.q);
+    if (this.reports) {
+      this.reports.set(key, ev.q);
       return;
     }
     if (this.recent(key) || this.preset === null) return;
@@ -78,7 +88,7 @@ export class LiveSync {
 
   setBypass(bypassed: boolean): void {
     this.lastSent.set("engage", this.now());
-    this.link.sendControl(ENGAGE_NUMBER, bypassed ? 0 : 16383);
+    this.link.sendControl(ENGAGE_NUMBER, bypassed ? 0 : Q_MAX);
   }
 
   /**
@@ -88,8 +98,8 @@ export class LiveSync {
    */
   async selectPreset(preset: number, params: Record<string, number>): Promise<void> {
     const gen = ++this.gen;
-    const sync = { reports: new Map<string, number>() };
-    this.sync = sync;
+    const reports = new Map<string, number>();
+    this.reports = reports;
     this.preset = preset;
     try {
       this.link.sendProgram(preset);
@@ -99,11 +109,11 @@ export class LiveSync {
       if (gen !== this.gen) return;
       for (const [key, v] of Object.entries(params)) {
         if (numberOf(key) === undefined) continue;
-        const report = sync.reports.get(key);
+        const report = reports.get(key);
         if (report === undefined || !sameAt14(key, v, report)) this.sendParam(key, qFor(key, v));
       }
     } finally {
-      if (this.sync === sync) this.sync = null;
+      if (this.reports === reports) this.reports = null;
     }
   }
 

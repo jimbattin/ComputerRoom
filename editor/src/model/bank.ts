@@ -7,9 +7,10 @@ import {
   type Board,
   delayLinesKey,
   GROUP_NAMES,
-  GROUPS,
   groupOf,
   isBoard,
+  KNOB_COUNT,
+  PARAM_GROUPS,
   PARAMETER_ORDER,
   RUNTIME_PARAMETER,
   THREE_WAY_TARGETS,
@@ -21,6 +22,8 @@ const MAX_TEXT_BYTES = 98304; // PresetProtocol::kMaxTextBytes
 export const MAX_PRESETS = 16; // kMaxPresets
 export const MAX_NAME_BYTES = 31; // kMaxPresetNameLen - 1
 export const TOTAL_LINE_COUNT = 5; // CloudSeed::TotalLineCount
+export const MAX_BLINKS = 20;
+export const MAX_LED_MS = 60000;
 
 export interface Preset {
   name: string;
@@ -162,7 +165,6 @@ function rejectUnknownKeys(t: Table, allowed: readonly string[], context: string
   }
 }
 
-const PARAM_GROUPS = Object.keys(GROUPS);
 const PARAMETER_NAMES: ReadonlySet<string> = new Set(PARAMETER_ORDER);
 
 function readPseudo(t: Table, group: string, key: string, index: number): number {
@@ -319,8 +321,8 @@ const PRESET_KEYS = [
 
 function readOptionalMs(preset: Table, key: string, index: number, fallback: number): number {
   if (!(key in preset)) return fallback;
-  const ms = readWhole(preset, key, 0, 60000);
-  if (ms === undefined) throw new Reject(`preset ${index}: ${key} must be a whole number 0..60000`);
+  const ms = readWhole(preset, key, 0, MAX_LED_MS);
+  if (ms === undefined) throw new Reject(`preset ${index}: ${key} must be a whole number 0..${MAX_LED_MS}`);
   return ms;
 }
 
@@ -341,8 +343,8 @@ function parsePreset(preset: Table, board: Board, index: number): Preset {
 
   // toml_int_in: an integer literal only, so `3.0` is rejected like the firmware does.
   const blinks = preset.blinks;
-  if (typeof blinks !== "bigint" || blinks < 1n || blinks > 20n) {
-    throw new Reject(`preset ${index}: blinks out of range 1..20`);
+  if (typeof blinks !== "bigint" || blinks < 1n || blinks > BigInt(MAX_BLINKS)) {
+    throw new Reject(`preset ${index}: blinks out of range 1..${MAX_BLINKS}`);
   }
 
   const ledOnMs = readOptionalMs(preset, "led_on_ms", index, 150);
@@ -357,7 +359,7 @@ function parsePreset(preset: Table, board: Board, index: number): Preset {
 
   const params: Record<string, number> = {};
   parseParams(preset, board, index, params);
-  const knobMap = parseMap(preset, index, "knob_map", 6, parseKnobTarget);
+  const knobMap = parseMap(preset, index, "knob_map", KNOB_COUNT, parseKnobTarget);
   const toggleMap = parseMap(preset, index, "toggle_map", toggleCount(board), (text, key, i) =>
     parseToggleTarget(text, board, key, i),
   );

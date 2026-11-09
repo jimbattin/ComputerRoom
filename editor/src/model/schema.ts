@@ -4,9 +4,10 @@
 /** The pedal a bank is written for: the root `board` key (preset_bank.h Board). */
 export type Board = "terrarium" | "hothouse";
 
-export const BOARDS: readonly Board[] = ["terrarium", "hothouse"];
-
 export const isBoard = (v: unknown): v is Board => v === "terrarium" || v === "hothouse";
+
+/** Knobs per bank of [preset.knob_map], on both boards. */
+export const KNOB_COUNT = 6;
 
 /** ToggleCount(): four two-position switches on a Terrarium, three three-position toggles on a HotHouse. */
 export const toggleCount = (board: Board): number => (board === "hothouse" ? 3 : 4);
@@ -49,6 +50,9 @@ export const GROUPS: Record<string, readonly string[]> = {
   output: ["DryOut", "PredelayOut", "EarlyOut", "MainOut"],
 };
 
+/** The Parameter group names, in kGroups order. */
+export const PARAM_GROUPS = Object.keys(GROUPS);
+
 /** Groups without a Parameter slot, parsed separately by the firmware. delay_lines: one key per board. */
 const PSEUDO_GROUPS: Record<string, readonly string[]> = {
   reverse: ["delay", "enabled", "direct_mix"],
@@ -63,10 +67,13 @@ export const GROUP_NAMES = Object.keys(ALL_GROUPS);
 const groupKeys = (g: string) => ALL_GROUPS[g]!.map((k) => `${g}.${k}`);
 
 /** The Parameter group that owns `name`, or undefined for an unknown name. */
-export const groupOf = (name: string): string | undefined => Object.keys(GROUPS).find((g) => GROUPS[g]!.includes(name));
+export const groupOf = (name: string): string | undefined => PARAM_GROUPS.find((g) => GROUPS[g]!.includes(name));
 
 /** On/off parameters: the engine reads any value >= 0.5 as on. */
 export const isOn = (v: number): boolean => v >= 0.5;
+
+/** The nearest of the three stored states 0 / 0.5 / 1 of a select3 parameter (delay_lines.select). */
+export const snapSelect3 = (v: number): number => Math.round(v * 2) / 2;
 
 /** Every Parameter name in Parameter.h order (kParameterNames), LineCount included. */
 export const PARAMETER_ORDER = [
@@ -253,7 +260,7 @@ const SEEDS: Record<string, true> = {
 export const PARAM_KEYS: string[] = GROUP_NAMES.flatMap(groupKeys);
 
 /** Valid [preset.knob_map] values: every Parameter key, plus "reverse.delay". */
-export const KNOB_TARGETS: string[] = [...Object.keys(GROUPS).flatMap(groupKeys), "reverse.delay"];
+export const KNOB_TARGETS: string[] = [...PARAM_GROUPS.flatMap(groupKeys), "reverse.delay"];
 
 const TOGGLE_PARAM_TARGETS = TOGGLE_PARAMS.map((name) => `${groupOf(name)}.${name}`);
 

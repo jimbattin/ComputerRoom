@@ -1,4 +1,4 @@
-import { fromQ, sameAt14 } from "../midi/control";
+import { normFromQ, sameAt14 } from "../midi/control";
 import {
   type BankDoc,
   deletePreset,
@@ -7,13 +7,24 @@ import {
   formatFloat32,
   formatNorm,
   loadBank,
+  MAX_BLINKS,
+  MAX_LED_MS,
   MAX_NAME_BYTES,
   MAX_PRESETS,
   type Preset,
   setField,
   TOTAL_LINE_COUNT,
 } from "./bank";
-import { type Board, KNOB_TARGETS, PARAMS, type PageId, toggleCount, toggleTargets } from "./schema";
+import {
+  type Board,
+  KNOB_COUNT,
+  KNOB_TARGETS,
+  PARAMS,
+  type PageId,
+  snapSelect3,
+  toggleCount,
+  toggleTargets,
+} from "./schema";
 
 export type Source = "project" | "file" | "pedal";
 
@@ -58,11 +69,14 @@ export type MapKind = "knob" | "toggle";
 /** Per map kind: the `Preset` property, the TOML table, its slot count, and its valid targets on `board`. */
 export const mapSpec = (kind: MapKind, board: Board) =>
   kind === "knob"
-    ? ({ prop: "knobMap", table: "knob_map", slots: 6, targets: KNOB_TARGETS } as const)
+    ? ({ prop: "knobMap", table: "knob_map", slots: KNOB_COUNT, targets: KNOB_TARGETS } as const)
     : ({ prop: "toggleMap", table: "toggle_map", slots: toggleCount(board), targets: toggleTargets(board) } as const);
 
 export type Action =
-  /** `board`: the pedal's, when the text came from it; else the bank's own `board` key decides. `pedalHash`: the text is the pedal's bank. */
+  /**
+   * `board`: the pedal's, when the text came from it; else the bank's own `board` key decides.
+   * `pedalHash`: the text is the pedal's bank.
+   */
   | { type: "load"; text: string; source: Source; fileName: string | null; board?: Board; pedalHash?: number }
   | { type: "pedalBank"; hash: number }
   | { type: "pedalPreset"; preset: number }
@@ -149,6 +163,20 @@ const identityOrigins = (presets: Preset[]): Origin[] => presets.map((_, index) 
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
+/** The range the pedal accepts for a scalar field, given the preset's other line count. */
+export function scalarRange(field: ScalarField, preset: Preset): [min: number, max: number] {
+  switch (field) {
+    case "blinks":
+      return [1, MAX_BLINKS];
+    case "default_delay_lines":
+      return [1, Math.min(TOTAL_LINE_COUNT, preset.maxDelayLines)];
+    case "max_delay_lines":
+      return [Math.max(1, preset.defaultDelayLines), TOTAL_LINE_COUNT];
+    default:
+      return [0, MAX_LED_MS];
+  }
+}
+
 /** The `Preset` property each scalar field edits. */
 export const SCALAR_PROP: Record<ScalarField, Exclude<(typeof SETUP_FIELDS)[number], "name">> = {
   blinks: "blinks",
@@ -219,25 +247,15 @@ export function reducer(s: EditorState, a: Action): EditorState {
       const target = s.presets[a.preset];
       const current = target?.params[a.key];
       if (s.pedalHash === null || !target || current === undefined || sameAt14(a.key, current, a.q)) return s;
-      let literal: string;
-      switch (PARAMS[a.key]?.kind) {
-        case "switch":
-          literal = formatNorm(a.q >= 8192 ? 1 : 0);
-          break;
-        case "select3":
-          literal = formatNorm(Math.round(fromQ(a.q) * 2) / 2);
-          break;
-        default:
-          literal = formatFloat32(fromQ(a.q));
-      }
+      const stored = normFromQ(a.key, a.q);
+      const literal = PARAMS[a.key]?.kind === "fader" ? formatFloat32(stored) : formatNorm(stored);
       const value = Number(literal);
       return editAt(s, a.preset, `params.${a.key}`, literal, { params: { ...target.params, [a.key]: value } });
     }
 
     case "setParam": {
       if (!(a.key in preset.params)) return s;
-      // delay_lines.select stores exactly 0, 0.5 or 1 (One / Default / Max).
-      const value = a.key === "delay_lines.select" ? Math.round(a.value * 2) / 2 : a.value;
+      const value = PARAMS[a.key]?.kind === "select3" ? snapSelect3(a.value) : a.value;
       const v = Number(formatNorm(clamp(value, 0, 1)));
       return edit(s, `params.${a.key}`, formatNorm(v), { params: { ...preset.params, [a.key]: v } });
     }
@@ -250,20 +268,8 @@ export function reducer(s: EditorState, a: Action): EditorState {
     case "setScalar": {
       const n = Math.round(a.value);
       if (!Number.isFinite(n)) return s;
-      let v: number;
-      switch (a.field) {
-        case "blinks":
-          v = clamp(n, 1, 20);
-          break;
-        case "default_delay_lines":
-          v = clamp(n, 1, Math.min(TOTAL_LINE_COUNT, preset.maxDelayLines));
-          break;
-        case "max_delay_lines":
-          v = clamp(n, Math.max(1, preset.defaultDelayLines), TOTAL_LINE_COUNT);
-          break;
-        default:
-          v = clamp(n, 0, 60000);
-      }
+      const [min, max] = scalarRange(a.field, preset);
+      const v = clamp(n, min, max);
       const literal = a.field.endsWith("delay_lines") ? `${v}.0` : String(v);
       const next = edit(s, a.field, literal, { [SCALAR_PROP[a.field]]: v });
       // Inserting an absent LED timing adds a line, so the parsed copy is rebuilt from the text.
@@ -286,7 +292,7 @@ export function reducer(s: EditorState, a: Action): EditorState {
       const index = s.presets.length;
       let doc = duplicatePreset(s.doc, s.selected);
       doc = setField(doc, index, "name", `"${preset.name.slice(0, MAX_NAME_BYTES - 5)} copy"`);
-      doc = setField(doc, index, "blinks", String(Math.min(index + 1, 20)));
+      doc = setField(doc, index, "blinks", String(Math.min(index + 1, MAX_BLINKS)));
       const origins = [...s.origins, { index: s.origins[s.selected]!.index, added: true }];
       return {
         ...s,

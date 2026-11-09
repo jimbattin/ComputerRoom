@@ -24,6 +24,7 @@ import {
 } from "./protocol";
 
 export interface MidiTransport {
+  /** Throws PedalDisconnectedError when the pedal's port is gone. */
   send(msg: Uint8Array): void;
   subscribe(cb: (msg: Uint8Array) => void): () => void;
   /** Resolves once the pedal's ports are back after a reboot; rejects with RebootTimeoutError. */
@@ -34,6 +35,21 @@ export class RebootTimeoutError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RebootTimeoutError";
+  }
+}
+
+export class PedalDisconnectedError extends Error {
+  constructor() {
+    super("pedal disconnected");
+    this.name = "PedalDisconnectedError";
+  }
+}
+
+/** A request went unanswered, resends included: the link to the pedal is dead. */
+export class NoReplyError extends ProtocolError {
+  constructor(message: string) {
+    super(message);
+    this.name = "NoReplyError";
   }
 }
 
@@ -83,29 +99,15 @@ export class PresetLink {
     // INFO, READ and DATA are answered identically when repeated (docs/USB_MIDI.md section 10).
     const attempts = cmd === CMD.INFO || cmd === CMD.READ || cmd === CMD.DATA ? 2 : 1;
     const frame = buildFrame(cmd, body);
+    const match = (msg: Uint8Array): Reply | null => {
+      const r = parseReply(msg);
+      if (!r || r.cmd !== (cmd | 0x40)) return null;
+      if (echo !== null && r.status === 0 && getU14(r.body, 0) !== echo) return null;
+      return r;
+    };
 
     for (let attempt = 0; attempt < attempts; attempt++) {
-      const { promise, resolve } = Promise.withResolvers<Reply | null>();
-      const unsubscribe = this.transport.subscribe((msg) => {
-        const r = parseReply(msg);
-        if (!r || r.cmd !== (cmd | 0x40)) return;
-        if (echo !== null && r.status === 0 && getU14(r.body, 0) !== echo) return;
-        clearTimeout(timer);
-        unsubscribe();
-        resolve(r);
-      });
-      const timer = setTimeout(() => {
-        unsubscribe();
-        resolve(null);
-      }, timeoutMs);
-      try {
-        this.transport.send(frame);
-      } catch (e) {
-        clearTimeout(timer);
-        unsubscribe();
-        throw e;
-      }
-      const reply = await promise;
+      const reply = await this.exchange(frame, match, timeoutMs);
       if (!reply) continue;
       if (reply.status !== 0) {
         const status = STATUS_NAMES[reply.status] ?? `status ${reply.status}`;
@@ -114,7 +116,29 @@ export class PresetLink {
       }
       return reply;
     }
-    throw new ProtocolError(`${name}: no reply`);
+    throw new NoReplyError(`${name}: no reply`);
+  }
+
+  /** Sends `frame` and resolves with the first message `match` accepts, or null after `timeoutMs`. */
+  private exchange<T>(frame: Uint8Array, match: (msg: Uint8Array) => T | null, timeoutMs: number): Promise<T | null> {
+    const { promise, resolve } = Promise.withResolvers<T | null>();
+    const finish = (value: T | null) => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(value);
+    };
+    const unsubscribe = this.transport.subscribe((msg) => {
+      const value = match(msg);
+      if (value !== null) finish(value);
+    });
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    try {
+      this.transport.send(frame);
+    } catch (e) {
+      finish(null);
+      throw e;
+    }
+    return promise;
   }
 
   /**
@@ -122,26 +146,8 @@ export class PresetLink {
    * (firmware without the Identity Reply) is a Terrarium with an unknown build.
    */
   async identify(): Promise<Identity> {
-    const { promise, resolve } = Promise.withResolvers<Identity | null>();
-    const unsubscribe = this.transport.subscribe((msg) => {
-      const id = parseIdentityReply(msg);
-      if (!id) return;
-      clearTimeout(timer);
-      unsubscribe();
-      resolve(id);
-    });
-    const timer = setTimeout(() => {
-      unsubscribe();
-      resolve(null);
-    }, this.replyTimeoutMs);
-    try {
-      this.transport.send(IDENTITY_REQUEST);
-    } catch (e) {
-      clearTimeout(timer);
-      unsubscribe();
-      throw e;
-    }
-    return (await promise) ?? { board: "terrarium", buildId: "unknown" };
+    const id = await this.exchange(IDENTITY_REQUEST, parseIdentityReply, this.replyTimeoutMs);
+    return id ?? { board: "terrarium", buildId: "unknown" };
   }
 
   async info(): Promise<InfoReply> {
@@ -260,7 +266,7 @@ export class PresetLink {
       await this.transport.waitForReboot();
       return await this.info();
     } catch (e) {
-      if (e instanceof RebootTimeoutError || (e instanceof ProtocolError && e.status === undefined)) return null;
+      if (e instanceof RebootTimeoutError || e instanceof NoReplyError) return null;
       throw e;
     }
   }

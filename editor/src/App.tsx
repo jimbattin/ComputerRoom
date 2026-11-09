@@ -6,10 +6,10 @@ import { FlowPanel } from "./components/FlowPanel";
 import { ProgramKeys } from "./components/ProgramKeys";
 import { KnobMapPage, PageKeys, ParamPage, SetupPage, ToggleMapPage } from "./components/pages";
 import { openTomlFile, projectPresets, saveTomlFile } from "./io/files";
-import { PresetLink } from "./midi/client";
+import { NoReplyError, PedalDisconnectedError, PresetLink } from "./midi/client";
 import { qFor, sameAt14 } from "./midi/control";
 import { LiveSync } from "./midi/live";
-import { fnv1a32, type Identity, type InfoReply, type LoadReply, ProtocolError } from "./midi/protocol";
+import { type Identity, type InfoReply, type LoadReply, textHash } from "./midi/protocol";
 import { connectPedal, isWebMidiSupported } from "./midi/webMidi";
 import { docText, loadBank } from "./model/bank";
 import { BLOCKS, type BlockId } from "./model/flow";
@@ -25,11 +25,14 @@ interface Confirm {
 
 const pct = (done: number, total: number) => Math.floor((done * 100) / Math.max(total, 1));
 
+const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
 /** How often the editor polls LOAD for the CPU meter (the pedal publishes its load once a second). */
 const LOAD_POLL_MS = 250;
 
 export function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const supported = useMemo(isWebMidiSupported, []);
   const [link, setLink] = useState<PresetLink | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -37,6 +40,10 @@ export function App() {
   const [info, setInfo] = useState<InfoReply | null>(null);
   /** The linked pedal's board and build; null until CONNECT. */
   const [identity, setIdentity] = useState<Identity | null>(null);
+  /** The pedal's audio load over the last second; null while unknown. */
+  const [cpuLoad, setCpuLoad] = useState<LoadReply | null>(null);
+  /** The pedal's bypass state as last reported over MIDI; null while unknown. */
+  const [bypassed, setBypassed] = useState<boolean | null>(null);
   /** Which board's built-in bank PROJECT loads while no pedal is linked. */
   const [projectBoard, setProjectBoard] = useState<Board>("terrarium");
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -44,13 +51,9 @@ export function App() {
   const [focusKey, setFocusKey] = useState<string | null>(null);
   /** Block last clicked in the flow diagram; cleared by a page key. */
   const [flowPin, setFlowPin] = useState<BlockId | null>(null);
-  const supported = useMemo(isWebMidiSupported, []);
-  /** The pedal's audio load over the last second; null while unknown. */
-  const [cpuLoad, setCpuLoad] = useState<LoadReply | null>(null);
+
   const busyRef = useRef(false);
   busyRef.current = busy;
-  /** The pedal's bypass state as last reported over MIDI; null while unknown. */
-  const [bypassed, setBypassed] = useState<boolean | null>(null);
   const liveSyncRef = useRef<LiveSync | null>(null);
   /** Whether the pedal's live reports may patch the doc: live and no operation running. */
   const liveRef = useRef(false);
@@ -87,10 +90,7 @@ export function App() {
   const changes = presets.map((_, i) => presetChanges(state, i));
   const selectedChanges = changes[selected];
 
-  const inSync = useMemo(
-    () => !!info && !!doc && fnv1a32(new TextEncoder().encode(docText(doc))) === info.activeHash,
-    [doc, info],
-  );
+  const inSync = useMemo(() => !!info && !!doc && textHash(docText(doc)) === info.activeHash, [doc, info]);
 
   const live = connected && !!link && !!info && state.pedalHash !== null && state.pedalHash === info.activeHash;
   liveRef.current = live && !busy;
@@ -143,7 +143,7 @@ export function App() {
     const sync = liveSyncRef.current;
     const target = presets[i];
     if (live && !busy && sync && target && i !== selected) {
-      sync.selectPreset(i, target.params).catch((e) => setStatus(e instanceof Error ? e.message : String(e)));
+      sync.selectPreset(i, target.params).catch((e) => setStatus(errorMessage(e)));
     }
   }
 
@@ -167,18 +167,15 @@ export function App() {
   }
 
   /** Runs one operation: clears the previous status, reports any error, drops a dead link. */
-  async function run(op: () => Promise<void>) {
+  async function run(op: () => Promise<void> | void) {
     setStatus(null);
     dispatch({ type: "dismissError" });
     setBusy(true);
     try {
       await op();
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setStatus(message);
-      if ((e instanceof ProtocolError && message.endsWith("no reply")) || message === "pedal disconnected") {
-        setConnected(false);
-      }
+      setStatus(errorMessage(e));
+      if (e instanceof NoReplyError || e instanceof PedalDisconnectedError) setConnected(false);
     } finally {
       setBusy(false);
     }
@@ -228,12 +225,13 @@ export function App() {
       if (file) load(file.text, "file", file.name);
     });
 
-  const onSave = () => {
-    const text = checkedText();
-    if (text === null) return;
-    saveTomlFile(text, state.fileName ?? "presets.toml");
-    dispatch({ type: "saved", text, fileName: state.fileName });
-  };
+  const onSave = () =>
+    run(() => {
+      const text = checkedText();
+      if (text === null) return;
+      saveTomlFile(text, state.fileName ?? "presets.toml");
+      dispatch({ type: "saved", text, fileName: state.fileName });
+    });
 
   /**
    * Opens the pedal's MIDI ports and identifies it. INFO must answer, so a Daisy running other
@@ -262,7 +260,7 @@ export function App() {
   /** READs the bank the pedal is playing and opens it on the preset that is playing. */
   async function readPedal(from: PresetLink, board: Board | undefined) {
     const text = await from.readAll((d, t) => setStatus(`READ ${pct(d, t)}%`));
-    load(text, "pedal", null, board, fnv1a32(new TextEncoder().encode(text)));
+    load(text, "pedal", null, board, textHash(text));
     const after = await from.info();
     setInfo(after);
     // Firmware from before INFO carried currentPreset leaves the first preset selected.
@@ -270,8 +268,8 @@ export function App() {
     setStatus(null);
   }
 
-  // On open: link the pedal and load the bank it is playing. Without a pedal (or Web MIDI) this
-  // leaves the usual status and the editor starts empty, as before.
+  // On open: link the pedal and load the bank it is playing. Without Web MIDI the device panel
+  // says so; without a pedal the status does. Either way the editor starts empty.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once, on mount
   useEffect(() => {
     if (!supported) return;

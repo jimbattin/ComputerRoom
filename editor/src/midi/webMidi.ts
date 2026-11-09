@@ -2,7 +2,7 @@
 // the pedal reboots polls requestMIDIAccess() instead of relying on MIDIAccess.onstatechange,
 // which Firefox has historically not fired for device hot-plug (Mozilla bug 836897).
 
-import { type MidiTransport, RebootTimeoutError } from "./client";
+import { type MidiTransport, PedalDisconnectedError, RebootTimeoutError } from "./client";
 import { createMidiAssembler } from "./protocol";
 
 // The pedal resets 100 ms after its reply, then spends ~2.5 s in the bootloader without a
@@ -45,7 +45,24 @@ async function findPorts(): Promise<Ports | null> {
   return input && output ? { input, output } : null;
 }
 
-export class WebMidiTransport implements MidiTransport {
+async function openPorts(ports: Ports): Promise<Ports> {
+  await ports.input.open();
+  await ports.output.open();
+  return ports;
+}
+
+/**
+ * `promise`'s value, or null once `ms` pass or it rejects. Web MIDI calls on a port that
+ * vanished during a reboot can stay pending forever (seen in Firefox), so every attempt is
+ * bounded.
+ */
+function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  const { promise: timeout, resolve } = Promise.withResolvers<null>();
+  const timer = setTimeout(() => resolve(null), ms);
+  return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+}
+
+class WebMidiTransport implements MidiTransport {
   private readonly subscribers = new Set<(msg: Uint8Array) => void>();
   private readonly feed = createMidiAssembler((msg) => {
     for (const cb of this.subscribers) cb(msg);
@@ -65,7 +82,7 @@ export class WebMidiTransport implements MidiTransport {
     try {
       this.ports.output.send(msg);
     } catch {
-      throw new Error("pedal disconnected");
+      throw new PedalDisconnectedError();
     }
   }
 
@@ -95,24 +112,7 @@ export class WebMidiTransport implements MidiTransport {
   }
 }
 
-async function openPorts(ports: Ports): Promise<Ports> {
-  await ports.input.open();
-  await ports.output.open();
-  return ports;
-}
-
-/**
- * `promise`'s value, or null once `ms` pass or it rejects. Web MIDI calls on a port that
- * vanished during a reboot can stay pending forever (seen in Firefox), so every attempt is
- * bounded.
- */
-function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
-  const { promise: timeout, resolve } = Promise.withResolvers<null>();
-  const timer = setTimeout(() => resolve(null), ms);
-  return Promise.race([promise.catch(() => null), timeout]).finally(() => clearTimeout(timer));
-}
-
-export async function connectPedal(): Promise<WebMidiTransport> {
+export async function connectPedal(): Promise<MidiTransport> {
   const found = await findPorts();
   if (!found) throw new Error(NOT_FOUND);
   const ports = await within(openPorts(found), CONNECT_TIMEOUT_MS);

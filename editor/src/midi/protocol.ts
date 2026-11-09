@@ -42,6 +42,9 @@ export function fnv1a32(bytes: Uint8Array): number {
   return h >>> 0;
 }
 
+/** FNV-1a of a bank text's bytes: INFO's activeHash when that text is the pedal's bank. */
+export const textHash = (text: string): number => fnv1a32(new TextEncoder().encode(text));
+
 export function buildFrame(cmd: number, body: ArrayLike<number> = []): Uint8Array {
   const out = new Uint8Array(body.length + 6);
   out[0] = 0xf0;

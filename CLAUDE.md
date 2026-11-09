@@ -731,9 +731,11 @@ Keep it in step with the firmware:
   `PresetLink.identify()` sends the Identity Request). `PresetLink` is stop-and-wait for SysEx
   requests, only so that each reply is matched to its request (the pedal queues received
   messages), and resends only INFO, READ and
-  DATA. `upload()` / `revert()` return `null` when the pedal cannot be verified after its
-  reboot: `waitForReboot()` gave up after 20 s, or INFO went unanswered. COMMIT `Ok` has
-  already stored the bank at that point
+  DATA. A request still unanswered after its resends throws `NoReplyError`, a send on a
+  vanished port `PedalDisconnectedError` (`client.ts`); either one drops the link in `App.tsx`
+  `run()`. `upload()` / `revert()` return `null` when the pedal cannot be verified after its
+  reboot: `waitForReboot()` gave up after 20 s (`RebootTimeoutError`), or INFO went unanswered
+  (`NoReplyError`). COMMIT `Ok` has already stored the bank at that point
 - `editor/src/midi/protocol.ts` `createMidiAssembler()` splits the input stream into SysEx
   messages and channel voice messages (running status kept), both delivered in order.
   `PresetLink.dump()` sends `0x0A DUMP`; `sendControl()` / `sendProgram()` send NRPN / PC
@@ -742,7 +744,8 @@ Keep it in step with the firmware:
   54 rows in the same order (`MIDI_CONTROLS`, key `"delay_lines"` for the per-board lines
   control and `"engage"` for bypass, both resolved by `paramKey()`), plus the 14-bit
   conversions `toQ()` / `fromQ()` (`Math.fround(q / 16383)`, bit-identical to the firmware's
-  `NormFromQ14()`), `qFor()` / `sameAt14()`, and `createLiveDecoder()` (emits a control only on
+  `NormFromQ14()`), `isOnQ()` (on from 8192), `qFor()` / `normFromQ()` (the value the pedal
+  stores for a received q) / `sameAt14()`, and `createLiveDecoder()` (emits a control only on
   CC38, a program on Cn, ignores plain CCs). A table change needs both files
 - `editor/src/midi/live.ts` `LiveSync` sends live edits (`sendParam()`, `setBypass()`),
   ignores reports of a key it sent less than `LIVE_ECHO_MS` (300 ms) ago, forwards the

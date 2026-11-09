@@ -299,12 +299,6 @@ html {
   box-shadow: inset 0 0 0 1.5px var(--larc-edit);
 }
 
-.larc .strip,
-.larc .setup-grid label,
-.larc .bank-chip {
-  position: relative;
-}
-
 .larc .strip:has(> .edit-mark) > .silk,
 .larc .setup-grid label:has(> .edit-mark) {
   color: var(--larc-edit);
@@ -358,6 +352,7 @@ html {
 }
 
 .larc .strip {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -402,7 +397,8 @@ html {
   gap: 0.4rem;
 }
 
-/* Vertical fader: max at the top. Thumb and track are styled identically for both engines. */
+/* Vertical fader: max at the top. Thumb and track are styled identically for both engines, in
+   separate rules: a selector list with a pseudo-element the browser does not know is dropped whole. */
 .larc .strip input[type="range"] {
   writing-mode: vertical-lr;
   direction: rtl;
@@ -499,15 +495,15 @@ html {
   color: var(--larc-silk);
 }
 
-.larc .map-col select.led {
-  font-size: 0.75rem;
-  padding: 0.35rem 2rem 0.35rem 0.5rem;
-}
-
 .larc .map-col {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+}
+
+.larc .map-col select.led {
+  font-size: 0.75rem;
+  padding: 0.35rem 2rem 0.35rem 0.5rem;
 }
 
 /* A (primary, `_a`) / B (secondary, `_b`, FS2 held) chips: ivory and dark like the two key colours. */
@@ -531,6 +527,7 @@ html {
 }
 
 .larc .bank-chip {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
@@ -567,6 +564,7 @@ html {
 }
 
 .larc .setup-grid label {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -591,19 +589,19 @@ html {
   color: #8a8d91;
 }
 
+.larc .flow-body {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
 /* A fixed height, so hovering a block never changes the page height: a resize that moved the
    diagram out from under the cursor ended the hover, which resized it back, in a loop. The
    tallest explainer (E.DIFF) fits from 800 px wide up; narrower windows scroll inside it. */
 .larc .flow-explain {
   height: 21rem;
   overflow-y: auto;
-}
-
-.larc .flow-body {
-  margin-top: 0.6rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
 }
 
 .larc .flow svg {
@@ -616,15 +614,15 @@ html {
   font-family: var(--larc-mono);
 }
 
+.larc .blk {
+  cursor: pointer;
+}
+
 .larc .blk rect,
 .larc .blk polygon {
   fill: var(--larc-block);
   stroke: #55595e;
   stroke-width: 1.2;
-}
-
-.larc .blk {
-  cursor: pointer;
 }
 
 .larc .blk:focus {

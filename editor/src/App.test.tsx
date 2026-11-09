@@ -24,7 +24,8 @@ describe("App", () => {
     // The DRY strip, the OUTPUT page key and program key 01 are marked; nothing else.
     const marked = [...container.querySelectorAll(".edit-mark")].map((m) => m.parentElement!.textContent);
     expect(marked).toEqual(["01", "OUTPUT", expect.stringContaining("DRY")]);
-    expect(screen.getByRole("slider", { name: "DRY" }).title).toMatch(/\nOriginal: (-INF|-?\d+\.\ddB) \([\d.]+\)$/);
+    const dryStrip = screen.getByRole("slider", { name: "DRY" }).closest<HTMLElement>(".strip")!;
+    expect(dryStrip.title).toMatch(/\nOriginal: (-INF|-?\d+\.\ddB) \([\d.]+\)$/);
   });
 
   it("flow diagram follows the page and the controls", async () => {
