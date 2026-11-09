@@ -294,11 +294,16 @@ reports its open end instead of its stored cutoff (`HighPass` 0.0 while `HiPassE
 `applyKnobTarget()` enables it on the first write, so the glide opens from there rather than
 stepping to the stored cutoff (about 2 kHz in Chorus and Dark Plate).
 
-`main()` settles the knob one-poles for 200 ms between `hw.StartAdc()` and `hw.StartAudio()`
-(`src/cloudseed.cpp:802-821`). `AnalogControl` starts at 0.0 and only converges while
-`ProcessAnalogControls()` runs, which otherwise first happens inside the audio callback: without
-the settle loop the first snapshot would capture ~5 % of each real knob position and the
-settling ramp itself would be read as a deliberate turn at every power-up.
+`main()` settles the knob one-poles and the switch debouncers for 200 ms between
+`hw.StartAdc()` and `hw.StartAudio()` (`src/cloudseed.cpp:802-826`). `AnalogControl` starts at
+0.0 and only converges while `ProcessAnalogControls()` runs, which otherwise first happens
+inside the audio callback: without the settle loop the first snapshot would capture ~5 % of
+each real knob position and the settling ramp itself would be read as a deliberate turn at
+every power-up. Likewise a `Switch` reports `Pressed()` only after 8 debounced 1 ms samples,
+so without `ProcessDigitalControls()` in the loop the first `ToggleBank` snapshot read every
+lever as released (Down; Middle on a HotHouse) and the real position 8 ms later as a flip:
+until 2026-11-09 a lever away from that position overrode the restored preset's stored state
+at every power-up (seen on a HotHouse: toggle 1 and 2 Up forced Max lines and Bloom on).
 
 **ADC smoothing**: libdaisy's default `AnalogControl` slew computes to `coeff_ = 1.0` at this
 callback rate (`libdaisy/src/hid/ctrl.cpp:16` with a 1 kHz update and the 0.002 s default),
@@ -413,7 +418,7 @@ Looking Glass" (`max_delay_lines = 4.0`) - it is CPU-intensive and crackles abov
 - Applied with `CloudSeed::ReverbController::LoadPreset()`
   (`CloudSeed/ReverbController.h:35`), which copies every slot except `LineCount`
   and then re-applies all 50 through `SetParameter`
-- Cycles using modulo operator: `(currentPreset + 1) % gPresets.count` (`src/cloudseed.cpp:848`)
+- Cycles using modulo operator: `(currentPreset + 1) % gPresets.count` (`src/cloudseed.cpp:853`)
 - Preset index is persisted to QSPI flash, so **the order in presets.toml is frozen**;
   reordering or deleting entries requires bumping `SETTINGS_VERSION` (`src/pedal_storage.cpp:5`)
 - `loadPreset()` (`src/cloudseed.cpp:183-215`) is the only reader of `gPresets` after boot. It loads
@@ -484,7 +489,7 @@ struct Settings {
    `state.currentPreset` in the main loop; the audio callback flips `state.bypass`
    (`src/cloudseed.cpp:357-360`)
 3. **In main loop**: `gStorage.ServiceSettingsSave(state.currentPreset, state.bypass)`
-   (`src/pedal_storage.cpp:107-120`, called on every pass at `src/cloudseed.cpp:855`) mirrors
+   (`src/pedal_storage.cpp:107-120`, called on every pass at `src/cloudseed.cpp:860`) mirrors
    both values into the RAM copy and restarts a `SETTINGS_SAVE_DELAY_MS` timer whenever they
    differ. Once 3 s pass without another change it saves the `Settings` store, outside the
    audio callback. A burst of preset/bypass changes therefore costs one QSPI sector erase, and
@@ -561,14 +566,14 @@ are unaffected by either hash.
 **Save** (FS1 held 5 s): `processFootswitches()` sets `gSaveRequested`. On the next callback
 with the preset-change gate open, the callback copies `GetAllParameters()`, `state.reverseDelayNorm`
 and the three toggle pseudo-values into `gSaveSnapshot`, marks it valid, and publishes it with
-`state.saveSnapshotReady` (`src/cloudseed.cpp:556-566`). The main loop (`:826-833`) copies the
+`state.saveSnapshotReady` (`src/cloudseed.cpp:556-566`). The main loop (`:831-838`) copies the
 snapshot into `gStorage.UserSlot(state.currentPreset)`, clears the flag, calls
 `gStorage.SaveUserPresets()` (a
 blocking erase + write in the main loop; audio keeps running from SRAM), and starts the
 confirmation blink.
 
 **Restore** (FS1 + FS2 held 5 s): the callback sets `state.triggerPresetRestore`. The main
-loop (`src/cloudseed.cpp:834-840`) clears the slot to `UserPreset{}` (invalid), reloads the preset through
+loop (`src/cloudseed.cpp:839-845`) clears the slot to `UserPreset{}` (invalid), reloads the preset through
 `loadPresetGated()`, which parks the knobs and toggles and drops any unsaved tweaks, calls
 `SaveUserPresets()`, and starts the confirmation blink. The save is skipped when the slot was already empty.
 
@@ -584,7 +589,7 @@ re-set to the bypass state and LED2 goes back to the preset pattern. This is dis
 ### USB-MIDI preset upload
 
 The Seed's micro-USB port enumerates as a class-compliant USB-MIDI device at every boot
-(`gMidiLink.Init()`, `src/cloudseed.cpp:816`, shortly before `hw.StartAudio()`); no driver
+(`gMidiLink.Init()`, `src/cloudseed.cpp:821`, shortly before `hw.StartAudio()`); no driver
 and no button press are needed. A Web MIDI host (typically a browser page) can upload a complete
 `presets.toml` text over SysEx, read the active bank's text back, revert to the bank built
 into the firmware, or restart the pedal into the Daisy bootloader's DFU mode (for example from a
@@ -605,7 +610,7 @@ read the missing byte as unknown. The pedal also answers the standard Universal 
 Identity Request (`F0 7E <id> 06 01 F7`) with `F0 7E 7F 06 02 7D 43 53 <board> 00 00 00 00 00 <build
 id> F7`, where the member byte `<board>` (index 8 counting `F0`) is the firmware's `Board`: `00`
 Terrarium, `01` HotHouse (`PresetProtocol::Init(..., buildId, board)`, passed `kBoard` at
-`src/cloudseed.cpp:815`). That request is not a session message and leaves the session timer alone.
+`src/cloudseed.cpp:820`). That request is not a session message and leaves the session timer alone.
 Hosts read the board from it before uploading: a bank for the other board is rejected at COMMIT.
 
 **Build id**: the `Makefile` writes `build/build_id.c` (`char kBuildId[33] = "<id>";`) at parse
@@ -651,7 +656,7 @@ reports are sent without a host request, and `CDC_Transmit_FS()` dereferences `p
 unchecked (`libdaisy/src/usbd/usbd_cdc_if.c:301-303`), so on 9 V power with no cable a send
 would fault.
 
-**Main loop** (`serviceUsbMidi()`, `src/cloudseed.cpp:705-737`, called every pass at `:853`,
+**Main loop** (`serviceUsbMidi()`, `src/cloudseed.cpp:705-737`, called every pass at `:858`,
 before `gStorage.ServiceSettingsSave()`): calls `gMidiLink.Service()`, hands
 `gCpuLoad.Published()` to `SetLoad()`, then pops up to `kMaxMidiMessagesPerPass` (64) received
 messages in arrival order, routing channel messages to `handleChannelMessage()`
@@ -1542,7 +1547,7 @@ toggle's pin(s) (a grounded pin is pressed).
 
 ### 6. Adjusting Audio Buffer Size
 
-**File**: [src/cloudseed.cpp](src/cloudseed.cpp) (`src/cloudseed.cpp:741`, `:802-821`)
+**File**: [src/cloudseed.cpp](src/cloudseed.cpp) (`src/cloudseed.cpp:741`, `:802-826`)
 
 ```cpp
 // Current: 48 samples per block
@@ -1743,12 +1748,12 @@ reverse mix) is still processed, deliberately, to suppress an audible 1 kHz whin
 `state.presetChangeInProgress` or `state.uploadActive` is set, the reverb is skipped entirely and
 the input is passed through to both outputs (`src/cloudseed.cpp:534-538`).
 
-**CloudSeed Main Loop** (`main()` while loop at `src/cloudseed.cpp:823-862` - free-running, no sleep):
-1. **Save / restore** (`:826-840`): a published `gSaveSnapshot` is copied into the current
+**CloudSeed Main Loop** (`main()` while loop at `src/cloudseed.cpp:828-867` - free-running, no sleep):
+1. **Save / restore** (`:831-845`): a published `gSaveSnapshot` is copied into the current
    preset's `UserPreset` slot (`gStorage.UserSlot()`) and written with `gStorage.SaveUserPresets()`; a restore clears the
    slot, reloads the preset with `loadPresetGated()`, and saves. Both start the confirmation
    blink. See "User preset save / factory restore"
-2. **Handle preset changes** (`:846-849`): clear `triggerPresetChange`, then
+2. **Handle preset changes** (`:851-854`): clear `triggerPresetChange`, then
    `selectPreset(next)` (`:235-238`): `loadPresetGated(next)` (`:220-232`) sets
    `presetChangeInProgress` and
    `state.controlResetPending` (so the knob and toggle positions are re-snapshotted before the
@@ -1761,7 +1766,7 @@ the input is passed through to both outputs (`src/cloudseed.cpp:534-538`).
    The seven flags shared with the callback (`bypass`, `triggerPresetChange`,
    `triggerPresetRestore`, `saveSnapshotReady`, `presetChangeInProgress`, `uploadActive`,
    `controlResetPending`) are `volatile bool` (`:68-74`)
-3. **USB-MIDI** (preset protocol and live control): `serviceUsbMidi()` (`:853`, body `:705-737`)
+3. **USB-MIDI** (preset protocol and live control): `serviceUsbMidi()` (`:858`, body `:705-737`)
    hands `gCpuLoad.Published()` to the protocol (`SetLoad()`), then handles up to 64 received
    messages in arrival order: channel messages through `handleChannelMessage()` (CC / NRPN into
    the mailbox, Engage, Program Change via `selectPreset()`), SysEx frames through
@@ -1772,10 +1777,10 @@ the input is passed through to both outputs (`src/cloudseed.cpp:534-538`).
    successful COMMIT or REVERT - and a COMMIT that fails after already
    erasing the bank the pedal is running - reboots via `NVIC_SystemReset()`; DFU resets into the
    bootloader via `System::ResetToBootloader()` (see "USB-MIDI preset upload" above)
-4. **Persist settings**: `gStorage.ServiceSettingsSave()` (`:855`) - the coalesced flash write described
+4. **Persist settings**: `gStorage.ServiceSettingsSave()` (`:860`) - the coalesced flash write described
    under Preset Persistence
-5. **Update LEDs**: `ServiceConfirmBlink()`, else `ServicePresetBlink()` (`:858-859`)
-6. `if (kKeepCoreBusy) keepCoreBusy();` (`:861`, defined at `:601-610`; Terrarium only:
+5. **Update LEDs**: `ServiceConfirmBlink()`, else `ServicePresetBlink()` (`:863-864`)
+6. `if (kKeepCoreBusy) keepCoreBusy();` (`:866`, defined at `:601-610`; Terrarium only:
    `kKeepCoreBusy` in `src/board.h`, the HotHouse image has none) — deliberate busy work that keeps the core
    out of idle between callbacks and reduces an audible 1 kHz whine: it advances a `volatile`
    phase by 0.001 (wrapped at `TWO_PI`) and stores `sinf(phase)` to a `volatile` sink, so every
@@ -2024,7 +2029,7 @@ Key changes in this fork:
     when `DryOut`/`EarlyOut`/`MainOut` change (`state.outputLevelsDirty`), not per block
 14. **1 kHz whine mitigation**: the reverb is still processed while bypassed
     (`src/cloudseed.cpp:571-579`) and, on the Terrarium only (`kKeepCoreBusy`, `src/board.h`),
-    every main-loop pass calls `keepCoreBusy()` (`src/cloudseed.cpp:601-610`, `:861`): a real
+    every main-loop pass calls `keepCoreBusy()` (`src/cloudseed.cpp:601-610`, `:866`): a real
     FPU `sinf()` of a `volatile` phase plus `volatile` loads and stores, so the core never idles
     between callbacks
 15. **FPU flush-to-zero enabled at boot** to eliminate denormal stalls (`src/cloudseed.cpp:740`)
@@ -2073,7 +2078,7 @@ Key changes in this fork:
     toggle target switches the line count between them (off = default, on = max), replacing the
     old hard-coded 2-line default
 22. **USB-MIDI preset upload**: the Seed's micro-USB port is a class-compliant USB-MIDI device
-    at every boot (`gMidiLink.Init()`, `src/cloudseed.cpp:816`); a host can upload a complete
+    at every boot (`gMidiLink.Init()`, `src/cloudseed.cpp:821`); a host can upload a complete
     `presets.toml` text, read the active bank back, or revert to the built-in bank over SysEx
     protocol v1 ([src/preset_protocol.h](src/preset_protocol.h),
     [docs/USB_MIDI.md](docs/USB_MIDI.md)). An upload is validated with the firmware's own parser
@@ -2213,4 +2218,4 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
    [src/preset_bank.cpp](src/preset_bank.cpp); shared with knobs via `splitTarget()` /
    `resolveParamTarget()`
 9. User preset store → `UserPreset` / `UserPresets` (`src/pedal_storage.h:29-46`), `PedalStorage::Init()`
-   (`src/pedal_storage.cpp:41-56`), save/restore handling in the main loop (`src/cloudseed.cpp:826-840`)
+   (`src/pedal_storage.cpp:41-56`), save/restore handling in the main loop (`src/cloudseed.cpp:831-845`)

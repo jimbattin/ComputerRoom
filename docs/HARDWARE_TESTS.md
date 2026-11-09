@@ -270,6 +270,10 @@ move a lever away from its position and back to make it write.
 7. `$H identity`. Pass: `member=01 00`.
 8. `$H upload presets.toml` (the Terrarium bank). Pass: COMMIT prints `ParseError … bank is for
    board "terrarium", this pedal is "hothouse"`, nothing reboots, `$H info` is unchanged.
+9. **Boot parks the levers.** Put toggle 1 and toggle 2 Up, select preset 9 (`$H pc 8`) and wait
+   3 s, then power-cycle (or `$H revert` to reboot). `$H dump`. Pass: `CC 77 = 64`
+   (`delay_lines.select` = 0.5 as stored) and `CC 22 = 0` (Bloom off): the levers write only once
+   moved. A Terrarium with SWITCH_1 Up shows the same: `CC 77` is the stored `max`.
 
 ### H16. CPU load (LOAD)
 
@@ -341,3 +345,4 @@ Copy one row per validated revision.
 |---|---|---|---|---|---|---|---|
 | 2026-09-26 | 89dc63a | jbattin | pass | pass | pass | pass | Baseline c5609ec (last pre-USB). S3 SAME-CALLS, 1780 -> 1766 lines. S4: DTCM +15,136 B (USB stack), SRAM +11,108 B, RAM_D2_DMA +988 B (MIDI rx/tx), SDRAM +627,424 B (toml_arena 512 KiB + gUploadText 96 KiB + gUploadCheck). H10 flood: 4,250 INFO, 85 READ-all, no errors. |
 | 2026-11-09 | 715a6a1+dirty | Claude (scripted, HotHouse) | S1, S2 pass | H2, H3, H13 pass | - | not run | H16.1: Chorus 20.1 % avg / 26.7 % max, 0 overruns. H17 (scripted parts): dump 54 CC + 54 NRPN, PC 2 reported with full state, NRPN 40 / CC 70 / Engage applied and reported. H18.1: pre-audit 23.7 / 31.4 % -> 20.1 / 26.7 %. H18.2 (via NRPN 45): pre-audit max 558-590 %, 1-9 overruns per window -> max 39-44 %, 0 overruns. H18.3 (listening) and H18.4 (whine) not run. |
+| 2026-11-09 | 6446174+dirty (boot toggle fix) | Claude (scripted, HotHouse) | S1 pass | H2-H6, H8, H9 (steps 1-4), H13.1, H15.7-9 pass | pass (flood 20 s at P9 4 lines: 2,750 INFO, 55 READ-all, no errors; LOAD 64.3-64.6 % avg, 0 overruns) | not run | Found and fixed: levers overrode the stored preset at every power-up (toggle snapshot before the debouncers settled; H15.9 failed on 6446174 with CC 77 = 127, CC 22 = 127). H16.1/H18.1 per preset (avg / max %, default lines): 20.0/26.7, 16.1/21.9, 26.8/35.1, 30.6/37.9, 36.7/43.1, 30.3/40.2, 23.6/29.9, 8.9/14.1, 45.9/53.6, 17.2/24.2 (all within 0.6 points of the §12 B column); P9 at 4 lines 64.4/72.0 (old firmware on this pedal 64.3/72.7). H18.2 flips at 5 lines: NRPN 45 max 42.6-43.1 %, NRPN 26 max 41.7-42.6 %, 0 overruns. H6: LOAD 0.6 % while a session holds the gate, back at 63.5 % after the 5 s timeout, immediate after ABORT. H17 scripted parts pass. Listening checks (H11, H12, H15.1-6, H18.3-4) not run. |

@@ -801,14 +801,19 @@ int main(void) {
     // Start audio processing
     hw.StartAdc();
 
-    // Converge the knob one-poles before the first audio callback. AnalogControl
-    // starts at 0.0 and only filters toward the pot position while
-    // ProcessAnalogControls() runs (libdaisy/src/hid/ctrl.cpp:13,45), which
-    // otherwise first happens inside the audio callback: the KnobBank snapshot
-    // would capture ~5% of every real position and the settling ramp would be read
-    // as a deliberate turn. 200 ms at KNOB_SMOOTHING_COEFF leaves <0.01% error.
+    // Converge the knob one-poles and the switch debouncers before the first audio
+    // callback, whose first scan snapshots and parks every knob and toggle.
+    // AnalogControl starts at 0.0 and only filters toward the pot position while
+    // ProcessAnalogControls() runs (libdaisy/src/hid/ctrl.cpp:13,45): the KnobBank
+    // snapshot would capture ~5% of every real position and the settling ramp would be
+    // read as a deliberate turn. 200 ms at KNOB_SMOOTHING_COEFF leaves <0.01% error.
+    // A Switch reports Pressed() only after 8 debounced 1 ms samples
+    // (libdaisy/src/hid/switch.cpp:34-41): the ToggleBank snapshot would read every lever
+    // as released (Down, or Middle on a HotHouse), and its real position 8 ms later as a
+    // flip that overrides the preset's stored state.
     for (int i = 0; i < 200; i++) {
         hw.ProcessAnalogControls();
+        hw.ProcessDigitalControls();
         System::Delay(1);
     }
 
