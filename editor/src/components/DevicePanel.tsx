@@ -1,4 +1,4 @@
-import type { InfoReply } from "../midi/protocol";
+import type { Identity, InfoReply } from "../midi/protocol";
 import { Key, Led } from "./controls";
 
 export interface DevicePanelProps {
@@ -6,6 +6,8 @@ export interface DevicePanelProps {
   connected: boolean;
   busy: boolean;
   info: InfoReply | null;
+  /** The linked pedal's board and build id (Identity Reply). */
+  identity: Identity | null;
   inSync: boolean;
   onConnect: () => void;
   onRead: () => void;
@@ -27,6 +29,7 @@ export function DevicePanel(p: DevicePanelProps) {
         <Led small text="NO WEB MIDI - USE CHROME OR FIREFOX" />
       ) : info && p.connected ? (
         <>
+          {p.identity && <Led small text={`${p.identity.board.toUpperCase()}  BUILD ${p.identity.buildId}`} />}
           <Led small text={`SRC ${info.source === 1 ? "UPLOAD" : "BUILT-IN"}  PRE ${info.presetCount}`} />
           <Led small text={`LEN ${info.activeLength}  HASH 0x${info.activeHash.toString(16).padStart(8, "0")}`} />
           <Led small text={p.inSync ? "SYNC" : "DIFF"} />

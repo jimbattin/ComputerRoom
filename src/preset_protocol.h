@@ -23,8 +23,9 @@
 //                   (no timeout), ready for `make program-dfu`. Older firmware: BadFrame.
 //
 // Identity Request (Universal Non-Real-Time, any device id 00-7F): F0 7E <id> 06 01 F7
-// Identity Reply: F0 7E 7F 06 02 7D 43 53 00 00 00 00 00 00 <build id> F7
-//   manufacturer 7D, family 43 53 ("CS"), member 00 00 (Terrarium), version 00 00 00 00,
+// Identity Reply: F0 7E 7F 06 02 7D 43 53 <member> 00 00 00 00 00 <build id> F7
+//   manufacturer 7D, family 43 53 ("CS"), member <board> 00 (LSB first: 00 00 Terrarium,
+//   01 00 HotHouse; preset_bank.h Board), version 00 00 00 00,
 //   build id: 1..32 printable ASCII bytes, the short git commit at build time with "+dirty"
 //   when tracked files differed, or "unknown" outside git (Makefile, build/build_id.c).
 //
@@ -94,9 +95,9 @@ public:
 
     // rxBuffer holds kMaxTextBytes; `active` describes the bank the pedal booted.
     // `buildId` is the Identity Reply's build id and must outlive the protocol; null or
-    // empty is sent as "unknown".
+    // empty is sent as "unknown". `board` is the Identity Reply's member code (0..127).
     void Init(char* rxBuffer, BankValidator validate, const ActiveBank& active,
-              const char* buildId);
+              const char* buildId, uint8_t board);
     // frame = bytes between F0 and F7. Commit/Revert: the caller performs the flash
     // operation, then calls Finish() to build the reply.
     UploadAction Handle(const uint8_t* frame, size_t len, uint32_t nowMs);
@@ -123,6 +124,7 @@ private:
     BankValidator validate_ = nullptr;
     ActiveBank    active_   = {};
     const char*   buildId_  = nullptr;
+    uint8_t       board_    = 0;
     bool          session_  = false;
     uint32_t      expectedLength_ = 0;
     uint32_t      expectedHash_   = 0;

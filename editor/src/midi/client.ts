@@ -6,8 +6,11 @@ import {
   fnv1a32,
   getU14,
   getU21,
+  IDENTITY_REQUEST,
+  type Identity,
   type InfoReply,
   ProtocolError,
+  parseIdentityReply,
   parseReply,
   type Reply,
   STATUS_NAMES,
@@ -96,6 +99,33 @@ export class PresetLink {
       return reply;
     }
     throw new ProtocolError(`${name}: no reply`);
+  }
+
+  /**
+   * The pedal's board and build id from the MIDI Identity Reply. A pedal that does not answer
+   * (firmware without the Identity Reply) is a Terrarium with an unknown build.
+   */
+  async identify(): Promise<Identity> {
+    const { promise, resolve } = Promise.withResolvers<Identity | null>();
+    const unsubscribe = this.transport.subscribe((msg) => {
+      const id = parseIdentityReply(msg);
+      if (!id) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(id);
+    });
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve(null);
+    }, this.replyTimeoutMs);
+    try {
+      this.transport.send(IDENTITY_REQUEST);
+    } catch (e) {
+      clearTimeout(timer);
+      unsubscribe();
+      throw e;
+    }
+    return (await promise) ?? { board: "terrarium", buildId: "unknown" };
   }
 
   async info(): Promise<InfoReply> {

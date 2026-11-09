@@ -41,6 +41,9 @@ export const seedOf = (norm: number): number => Math.floor(norm * SEED_SCALE + 0
 /** The engine's reading of `norm` for parameter `key` ('group.Name'), as panel text. */
 export function formatValue(key: string, v: number, preset: LineCounts): string {
   if (key === "delay_lines.max") return `${isOn(v) ? preset.maxDelayLines : preset.defaultDelayLines}LN`;
+  if (key === "delay_lines.select") {
+    return `${v === 0 ? 1 : v === 1 ? preset.maxDelayLines : preset.defaultDelayLines}LN`;
+  }
   if (key === "reverse.delay") return `${Math.round(20 + table(v, "3oct") * 1980)}ms`;
   if (PARAMS[key]?.kind === "switch") return isOn(v) ? "ON" : "OFF";
 
@@ -81,6 +84,10 @@ export function formatValue(key: string, v: number, preset: LineCounts): string 
     case "LineModAmount":
     case "LateDiffusionModAmount":
       return `${(v * 2.5).toFixed(2)}ms`;
+    case "ScatterRate":
+      return `${(0.1 + table(v, "2dec") * 4.9).toFixed(2)}Hz`;
+    case "ScatterDepth":
+      return `${Math.round(v * 100)}%`;
     case "TapCount":
       return String(1 + Math.trunc(v * 49));
     case "DiffusionStages":

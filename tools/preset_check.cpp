@@ -1,5 +1,8 @@
-// Host-side check that presets.toml is accepted by the firmware's own parser.
-// Usage: preset_check --validate|--print-knob-map|--print-toggle-map <presets.toml>
+// Host-side check that a preset bank is accepted by the firmware's own parser.
+// Usage: preset_check [--board terrarium|hothouse] --validate|--print-knob-map|
+//                     --print-toggle-map <presets.toml>
+// --board             the board whose rules apply (default terrarium); the file's
+//                     `board` key must name it.
 // --validate          prints a one-line summary; exits 1 (with the parser's error
 //                     message on stderr) if the pedal would reject the file.
 // --print-knob-map    prints the resolved knob assignments of every preset.
@@ -82,6 +85,9 @@ static const char* toggleTargetName(const ToggleTarget& t)
         case ToggleTarget_DelayLinesMax: return "delay_lines.max";
         case ToggleTarget_ReverseEnabled: return "reverse.enabled";
         case ToggleTarget_ReverseDirectMix: return "reverse.direct_mix";
+        case ToggleTarget_DelayLinesSelect: return "delay_lines.select";
+        case ToggleTarget_EarlyEnvelope: return "early.envelope";
+        case ToggleTarget_ReverseMode: return "reverse.mode";
         case ToggleTarget_Param: break;
     }
     return kParameterNames[t.paramIndex];
@@ -96,8 +102,9 @@ int main(int argc, char** argv)
         Mode_PrintKnobMap,
         Mode_PrintToggleMap
     } mode           = Mode_None;
-    const char* path = NULL;
-    bool        bad  = false;
+    const char* path  = NULL;
+    bool        bad   = false;
+    Board       board = Board_Terrarium;
 
     for (int i = 1; i < argc; i++)
     {
@@ -108,6 +115,17 @@ int main(int argc, char** argv)
             flag = Mode_PrintKnobMap;
         else if (strcmp(argv[i], "--print-toggle-map") == 0)
             flag = Mode_PrintToggleMap;
+        else if (strcmp(argv[i], "--board") == 0)
+        {
+            if (i + 1 < argc && strcmp(argv[i + 1], BoardName(Board_Terrarium)) == 0)
+                board = Board_Terrarium;
+            else if (i + 1 < argc && strcmp(argv[i + 1], BoardName(Board_HotHouse)) == 0)
+                board = Board_HotHouse;
+            else
+                bad = true;
+            i++;
+            continue;
+        }
 
         if (flag != Mode_None)
         {
@@ -124,8 +142,8 @@ int main(int argc, char** argv)
     if (bad || mode == Mode_None || !path)
     {
         fprintf(stderr,
-                "usage: %s --validate|--print-knob-map|--print-toggle-map "
-                "<presets.toml>\n",
+                "usage: %s [--board terrarium|hothouse] "
+                "--validate|--print-knob-map|--print-toggle-map <presets.toml>\n",
                 argv[0]);
         return 2;
     }
@@ -140,8 +158,8 @@ int main(int argc, char** argv)
     // first allocation.
     PresetBank bank;
     char       err[192];
-    const bool ok = ParsePresetBankText(text, (uint32_t)length, bank, err, sizeof err,
-                                        arenaAlloc, arenaFree);
+    const bool ok = ParsePresetBankText(text, (uint32_t)length, board, bank, err,
+                                        sizeof err, arenaAlloc, arenaFree);
     free(text);
     if (!ok)
     {
@@ -175,7 +193,7 @@ int main(int argc, char** argv)
         {
             for (int b = 0; b < kControlBanks; b++)
             {
-                for (int t = 0; t < kToggleCount; t++)
+                for (int t = 0; t < ToggleCount(board); t++)
                     printf("preset %d toggle%d_%s = %s\n", p, t + 1,
                            kBankSuffix[b],
                            toggleTargetName(bank.presets[p].toggleMap[b][t]));
@@ -184,7 +202,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    printf("%s: %d presets valid, boot arena peak %zu of %zu bytes\n", path,
-           bank.count, gArenaPeak, kArenaSize);
+    printf("%s: %d %s presets valid, boot arena peak %zu of %zu bytes\n", path,
+           bank.count, BoardName(board), gArenaPeak, kArenaSize);
     return 0;
 }

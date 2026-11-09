@@ -158,6 +158,11 @@ namespace CloudSeed
 				// Effects
 			case Parameter::Interpolation:			   return P(Parameter::Interpolation) < 0.5 ? 0.0 : 1.0;
 
+				// Early tap animation
+			case Parameter::Scatter:                   return P(Parameter::Scatter) < 0.5 ? 0.0 : 1.0;
+			case Parameter::ScatterRate:               return 0.1 + ValueTables::Get(P(Parameter::ScatterRate), ValueTables::Response2Dec) * 4.9;
+			case Parameter::ScatterDepth:              return P(Parameter::ScatterDepth);
+
 			default: return 0.0;
 			}
 

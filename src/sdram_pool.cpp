@@ -60,9 +60,10 @@ static void* toml_arena_alloc(size_t size) {
 
 static void toml_arena_free(void*) {}
 
-bool ParsePresetText(const char* text, uint32_t length, PresetBank& bank, char* err, int errLen) {
+bool ParsePresetText(const char* text, uint32_t length, Board board, PresetBank& bank,
+                     char* err, int errLen) {
     toml_arena_index = 0;
-    const bool ok = ParsePresetBankText(text, length, bank, err, errLen,
+    const bool ok = ParsePresetBankText(text, length, board, bank, err, errLen,
                                         toml_arena_alloc, toml_arena_free);
     toml_arena_index = 0;
     return ok;

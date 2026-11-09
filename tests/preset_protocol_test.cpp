@@ -36,16 +36,17 @@ static Bytes frame(uint8_t cmd) { return Bytes{0x7D, 0x43, 0x53, cmd}; }
 
 // Every reply is one well-formed SysEx message: either ours, F0 7D 43 53 <cmd|0x40>
 // <status> ... F7, at most kMaxReply bytes, with every byte in between below 0x80; or
-// an Identity Reply, F0 7E 7F 06 02 7D 43 53 00 00 00 00 00 00 <printable build id> F7.
+// an Identity Reply, F0 7E 7F 06 02 7D 43 53 <board> 00 00 00 00 00 <printable build id> F7.
 static void checkReplyWellFormed(const PresetProtocol& p) {
     const size_t n = p.ReplyLength();
     if (n == 0) return;
     const uint8_t* r = p.Reply();
     if (n > 1 && r[1] == 0x7E) {
-        static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x43,
-                                        0x53, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x43, 0x53};
+        static const uint8_t kZeros[5] = {};
         bool ok = n >= 16 && n <= 14 + PresetProtocol::kMaxBuildId + 1
-                  && memcmp(r, kHead, sizeof kHead) == 0 && r[n - 1] == 0xF7;
+                  && memcmp(r, kHead, sizeof kHead) == 0 && r[8] < 0x80
+                  && memcmp(r + 9, kZeros, sizeof kZeros) == 0 && r[n - 1] == 0xF7;
         for (size_t i = 14; ok && i + 1 < n; ++i) ok = r[i] >= 0x20 && r[i] <= 0x7E;
         CHECK(ok);
         return;
@@ -69,12 +70,12 @@ struct Fixture {
     std::string activeText;
     explicit Fixture(std::string text = defaultActiveText(), BankValidator v = stubValidator,
                      uint32_t hash = 0, bool useHash = false,
-                     const char* buildId = "1a2b3c4+dirty")
+                     const char* buildId = "1a2b3c4+dirty", uint8_t board = 0)
         : activeText(text) {
         ActiveBank active = {activeText.c_str(), (uint32_t)activeText.size(),
                              useHash ? hash : Fnv1a32(activeText.data(), (uint32_t)activeText.size()),
                              true, 7};
-        proto.Init(rx.data(), v, active, buildId);
+        proto.Init(rx.data(), v, active, buildId, board);
     }
     UploadAction send(const Bytes& f, uint32_t now = 0) {
         const UploadAction a = proto.Handle(f.data(), f.size(), now);
@@ -466,7 +467,7 @@ static void testFlashFailures() {
 // (libdaisy/src/hid/usb_midi.cpp:163-195) and fed to the assembler one packet at a time.
 static PresetBank gCheckBank;
 static bool realValidator(const char* t, uint32_t n, char* err, int errLen) {
-    return ParsePresetBankText(t, n, gCheckBank, err, errLen, malloc, free);
+    return ParsePresetBankText(t, n, Board_Terrarium, gCheckBank, err, errLen, malloc, free);
 }
 
 static void deliver(Fixture& fx, SysExAssembler& as, const Bytes& body) {
@@ -536,7 +537,7 @@ static void testEndToEnd(const char* fixturePath) {
     bad.replace(at, 12, "\nblinks = 99\n");
     char expected[128];
     PresetBank scratch;
-    CHECK(!ParsePresetBankText(bad.data(), (uint32_t)bad.size(), scratch, expected,
+    CHECK(!ParsePresetBankText(bad.data(), (uint32_t)bad.size(), Board_Terrarium, scratch, expected,
                                sizeof expected, malloc, free));
     CHECK(uploadOverUsb(fx, bad) == UploadAction::None);
     CHECK(fx.replyCmd() == 0x44 && fx.status() == (int)UploadStatus::ParseError);
@@ -617,6 +618,13 @@ static void testIdentity() {
         Fixture ctl(defaultActiveText(), stubValidator, 0, false, "ab\x01" "c");
         ctl.send({0x7E, 0x7F, 0x06, 0x01});
         CHECK(identityBuildId(ctl.proto) == "ab?c");
+    }
+    {
+        // The member code carries the board: 00 00 Terrarium, 01 00 HotHouse.
+        Fixture hh(defaultActiveText(), stubValidator, 0, false, "x", 1);
+        hh.send({0x7E, 0x7F, 0x06, 0x01});
+        CHECK(hh.proto.Reply()[8] == 0x01 && hh.proto.Reply()[9] == 0x00);
+        CHECK(identityBuildId(hh.proto) == "x");
     }
     {
         // Not a session message: the session timer is not refreshed.

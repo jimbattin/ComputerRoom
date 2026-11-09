@@ -1,10 +1,15 @@
 // Local files through standard APIs both Chrome and Firefox implement: <input type=file> to
 // open, a Blob download to save (where it lands is the browser's download setting).
 
-import projectPresetsText from "../../../presets.toml" with { type: "text" };
+import terrariumPresets from "../../../presets.toml" with { type: "text" };
+import hothousePresets from "../../../presets_hothouse.toml" with { type: "text" };
+import type { Board } from "../model/schema";
 
-/** The repo's presets.toml, verbatim: a text import, so Bun does not parse it as TOML. */
-export const projectPresets: string = projectPresetsText;
+/**
+ * Each board's built-in bank from the repo (presets.toml, presets_hothouse.toml), verbatim:
+ * text imports, so Bun does not parse them as TOML.
+ */
+export const projectPresets: Record<Board, string> = { terrarium: terrariumPresets, hothouse: hothousePresets };
 
 export function openTomlFile(): Promise<{ text: string; name: string } | null> {
   const { promise, resolve, reject } = Promise.withResolvers<{ text: string; name: string } | null>();

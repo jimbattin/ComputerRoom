@@ -1,10 +1,23 @@
-// Preset schema, mirroring kGroups / kToggleParams in src/preset_bank.cpp and the parameter
-// reference at the top of presets.toml.
+// Preset schema, mirroring kGroups / kToggleParams / parseToggleTarget() in src/preset_bank.cpp
+// and the parameter reference at the top of presets.toml / presets_hothouse.toml.
+
+/** The pedal a bank is written for: the root `board` key (preset_bank.h Board). */
+export type Board = "terrarium" | "hothouse";
+
+export const BOARDS: readonly Board[] = ["terrarium", "hothouse"];
+
+export const isBoard = (v: unknown): v is Board => v === "terrarium" || v === "hothouse";
+
+/** ToggleCount(): four two-position switches on a Terrarium, three three-position toggles on a HotHouse. */
+export const toggleCount = (board: Board): number => (board === "hothouse" ? 3 : 4);
+
+/** The [preset.params.delay_lines] key: `max` (0..1) on a Terrarium, `select` (0 / 0.5 / 1) on a HotHouse. */
+export const delayLinesKey = (board: Board): "max" | "select" => (board === "hothouse" ? "select" : "max");
 
 /** The 8 Parameter groups in kGroups order, keys in presets.toml order. */
 export const GROUPS: Record<string, readonly string[]> = {
   input: ["InputMix", "PreDelay", "HiPassEnabled", "HighPass", "LowPassEnabled", "LowPass"],
-  early: ["TapCount", "TapLength", "TapGain", "TapDecay", "Bloom"],
+  early: ["TapCount", "TapLength", "TapGain", "TapDecay", "Bloom", "Scatter", "ScatterRate", "ScatterDepth"],
   early_diffusion: [
     "DiffusionEnabled",
     "DiffusionStages",
@@ -36,10 +49,10 @@ export const GROUPS: Record<string, readonly string[]> = {
   output: ["DryOut", "PredelayOut", "EarlyOut", "MainOut"],
 };
 
-/** Groups without a Parameter slot, parsed separately by the firmware. */
+/** Groups without a Parameter slot, parsed separately by the firmware. delay_lines: one key per board. */
 const PSEUDO_GROUPS: Record<string, readonly string[]> = {
   reverse: ["delay", "enabled", "direct_mix"],
-  delay_lines: ["max"],
+  delay_lines: ["max", "select"],
 };
 
 const ALL_GROUPS: Record<string, readonly string[]> = { ...GROUPS, ...PSEUDO_GROUPS };
@@ -104,14 +117,18 @@ export const PARAMETER_ORDER = [
   "CutoffEnabled",
   "LateStageTap",
   "Interpolation",
+  "Scatter",
+  "ScatterRate",
+  "ScatterDepth",
 ] as const;
 
-/** Driven live by the "delay_lines.max" toggle target; must not appear in a file. */
+/** Driven live by the delay-line toggle targets; must not appear in a file. */
 export const RUNTIME_PARAMETER = "LineCount";
 
 /** On/off parameters a toggle may target (kToggleParams). */
 export const TOGGLE_PARAMS = [
   "Bloom",
+  "Scatter",
   "HiPassEnabled",
   "LowPassEnabled",
   "DiffusionEnabled",
@@ -125,6 +142,12 @@ export const TOGGLE_PARAMS = [
   "Interpolation",
 ];
 
+/** Toggle targets that need a three-position (HotHouse) toggle: Down / Middle / Up. */
+export const THREE_WAY_TARGETS: readonly string[] = ["delay_lines.select", "early.envelope", "reverse.mode"];
+
+/** The two-state pseudo-targets, valid on both boards. */
+const BINARY_PSEUDO_TARGETS = ["delay_lines.max", "reverse.enabled", "reverse.direct_mix"];
+
 export interface ParamDef {
   /** 'group.Key', e.g. 'input.PreDelay'. */
   key: string;
@@ -132,7 +155,8 @@ export interface ParamDef {
   name: string;
   /** Panel label, at most 6 characters. */
   label: string;
-  kind: "fader" | "switch";
+  /** select3: the three stored states 0 / 0.5 / 1 (delay_lines.select). */
+  kind: "fader" | "switch" | "select3";
   description: string;
   /** 'seed' params are entered as the engine's integer seed (value x 1000000). */
   entry: "norm" | "seed";
@@ -151,6 +175,9 @@ const DEFS: Record<string, [string, string]> = {
   "early.TapGain": ["TAPGN", "gain of the tap bank, 2-decade curve"],
   "early.TapDecay": ["TAPDCY", "how fast tap gain falls across the bank, 0-1"],
   "early.Bloom": ["BLOOM", "on when >= 0.5, reverses the early tap gain order"],
+  "early.Scatter": ["SCATTR", "on when >= 0.5: each early tap's gain oscillates instead of only falling or rising"],
+  "early.ScatterRate": ["SCRATE", "Scatter LFO rate, 0.1-5 Hz (2-decade curve; each tap varies it by +-15%)"],
+  "early.ScatterDepth": ["SCDPTH", "how far each tap's gain dips, 0-1 (0 = static, 1 = down to silence)"],
   "early_diffusion.DiffusionEnabled": ["DIFF", "on when >= 0.5: runs the early allpass diffuser"],
   "early_diffusion.DiffusionStages": ["STAGES", "allpass stages in series, 1-2"],
   "early_diffusion.DiffusionDelay": ["DIFDLY", "delay per allpass stage, 10-100 ms"],
@@ -201,7 +228,15 @@ const DEFS: Record<string, [string, string]> = {
     "REVMIX",
     "on when >= 0.5: reversed reverb mixed into the output; off: reverse feeds the reverb tail",
   ],
-  "delay_lines.max": ["LINES", "on when >= 0.5: max_delay_lines lines, else default_delay_lines"],
+  "delay_lines.max": ["LINES", "Terrarium: on when >= 0.5: max_delay_lines lines, else default_delay_lines"],
+  "delay_lines.select": ["LINES", "HotHouse: 0 = one line, 0.5 = default_delay_lines, 1 = max_delay_lines"],
+};
+
+/** Descriptions of the toggle targets that store no value of their own. */
+const TARGET_DESCRIPTIONS: Record<string, string> = {
+  "early.envelope": "three-position: down = Scatter on, Bloom off; middle = both off; up = Bloom on, Scatter off",
+  "reverse.mode":
+    "three-position: down = reverse off; middle = reverse into the reverb; up = reversed reverb mixed direct",
 };
 
 const SEEDS: Record<string, true> = {
@@ -211,22 +246,67 @@ const SEEDS: Record<string, true> = {
   "seeds.PostDiffusionSeed": true,
 };
 
-/** Every editable parameter key: the 46 Parameters, then the 4 pseudo keys. */
+/**
+ * Every editable parameter key: the 49 Parameters, then the pseudo keys. A preset holds one of
+ * delay_lines.max / delay_lines.select, by board.
+ */
 export const PARAM_KEYS: string[] = GROUP_NAMES.flatMap(groupKeys);
 
 /** Valid [preset.knob_map] values: every Parameter key, plus "reverse.delay". */
 export const KNOB_TARGETS: string[] = [...Object.keys(GROUPS).flatMap(groupKeys), "reverse.delay"];
 
-/** Valid [preset.toggle_map] values: the three pseudo targets, then kToggleParams. */
-export const TOGGLE_TARGETS: string[] = [
-  "delay_lines.max",
-  "reverse.enabled",
-  "reverse.direct_mix",
-  ...TOGGLE_PARAMS.map((name) => `${groupOf(name)}.${name}`),
-];
+const TOGGLE_PARAM_TARGETS = TOGGLE_PARAMS.map((name) => `${groupOf(name)}.${name}`);
+
+/** Valid [preset.toggle_map] values on `board`: pseudo targets (three-way first on a HotHouse), then kToggleParams. */
+export const toggleTargets = (board: Board): string[] =>
+  board === "hothouse"
+    ? [...THREE_WAY_TARGETS, ...BINARY_PSEUDO_TARGETS, ...TOGGLE_PARAM_TARGETS]
+    : [...BINARY_PSEUDO_TARGETS, ...TOGGLE_PARAM_TARGETS];
 
 /** Toggle targets drawn as ON/OFF switches; the stage counts are 1-2 faders. */
-const SWITCHES: ReadonlySet<string> = new Set(TOGGLE_TARGETS.filter((t) => !t.endsWith("Stages")));
+const SWITCHES: ReadonlySet<string> = new Set(
+  [...BINARY_PSEUDO_TARGETS, ...TOGGLE_PARAM_TARGETS].filter((t) => !t.endsWith("Stages")),
+);
+
+const THREE_POSITIONS: Record<string, [string, string, string]> = {
+  "delay_lines.select": ["1 LINE", "DEFAULT", "MAX"],
+  "early.envelope": ["SCATTER", "NEITHER", "BLOOM"],
+  "reverse.mode": ["OFF", "INTO REVERB", "DIRECT"],
+};
+
+const TWO_POSITIONS: Record<string, [string, string]> = {
+  "delay_lines.max": ["DEFAULT", "MAX"],
+  "reverse.direct_mix": ["INTO REVERB", "DIRECT"],
+  "early_diffusion.DiffusionStages": ["1 STG", "2 STG"],
+  "late_diffusion.LateDiffusionStages": ["1 STG", "2 STG"],
+};
+
+/**
+ * What each lever position selects for a toggle target, Down first: Down / Middle / Up on a
+ * HotHouse, Down / Up on a Terrarium. An on/off target is on only with the lever up
+ * (applyToggleTarget() in src/cloudseed.cpp), so a HotHouse middle position is off.
+ */
+export function togglePositions(target: string, board: Board): { pos: string; text: string }[] {
+  const three = THREE_POSITIONS[target];
+  if (three) {
+    return [
+      { pos: "DOWN", text: three[0] },
+      { pos: "MIDDLE", text: three[1] },
+      { pos: "UP", text: three[2] },
+    ];
+  }
+  const [off, on] = TWO_POSITIONS[target] ?? ["OFF", "ON"];
+  return board === "hothouse"
+    ? [
+        { pos: "DOWN", text: off },
+        { pos: "MIDDLE", text: off },
+        { pos: "UP", text: on },
+      ]
+    : [
+        { pos: "DOWN", text: off },
+        { pos: "UP", text: on },
+      ];
+}
 
 export const PARAMS: Record<string, ParamDef> = Object.fromEntries(
   PARAM_KEYS.map((key) => {
@@ -239,7 +319,7 @@ export const PARAMS: Record<string, ParamDef> = Object.fromEntries(
       group,
       name,
       label,
-      kind: SWITCHES.has(key) ? "switch" : "fader",
+      kind: key === "delay_lines.select" ? "select3" : SWITCHES.has(key) ? "switch" : "fader",
       description,
       entry: SEEDS[key] ? "seed" : "norm",
     };
@@ -249,7 +329,8 @@ export const PARAMS: Record<string, ParamDef> = Object.fromEntries(
 
 export const PAGES = [
   { id: "input", label: "INPUT", keys: groupKeys("input") },
-  { id: "early", label: "EARLY", keys: groupKeys("early") },
+  { id: "early", label: "EARLY", keys: groupKeys("early").slice(0, 5) },
+  { id: "scatter", label: "SCATTER", keys: groupKeys("early").slice(5) },
   { id: "ediff", label: "E.DIFF", keys: groupKeys("early_diffusion") },
   { id: "late", label: "LATE", keys: groupKeys("late") },
   { id: "ldiff", label: "L.DIFF", keys: groupKeys("late_diffusion") },
@@ -264,3 +345,7 @@ export const PAGES = [
 ] as const;
 
 export type PageId = (typeof PAGES)[number]["id"];
+
+/** A knob or toggle target's description: the parameter's, or the pseudo-target's. */
+export const targetDescription = (target: string): string =>
+  PARAMS[target]?.description ?? TARGET_DESCRIPTIONS[target] ?? target;

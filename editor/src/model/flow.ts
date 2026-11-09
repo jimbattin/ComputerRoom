@@ -83,10 +83,13 @@ export const BLOCKS: Record<BlockId, BlockInfo> = {
       "early.TapGain",
       "early.TapDecay",
       "early.Bloom",
+      "early.Scatter",
+      "early.ScatterRate",
+      "early.ScatterDepth",
       "seeds.TapSeed",
       "seeds.CrossSeed",
     ],
-    text: "The early reflections: a multi-tap delay with up to 50 taps spread over TapLength. Tap times and gains come from TapSeed, so every seed is a different room shape. TapGain trades the clean pass-through for the taps, TapDecay makes later taps quieter (at 1 the last is 40 dB down), and BLOOM reverses the gain order so the taps swell instead of fade. This is the first sound of the room, before the dense tail.",
+    text: "The early reflections: a multi-tap delay with up to 50 taps spread over TapLength. Tap times and gains come from TapSeed, so every seed is a different room shape. TapGain trades the clean pass-through for the taps, TapDecay makes later taps quieter (at 1 the last is 40 dB down), and BLOOM reverses the gain order so the taps swell instead of fade. SCATTER animates the pattern: each tap's gain dips and recovers on its own slow LFO (ScatterRate, each tap 15% faster or slower from a seeded phase), between full and (1 - ScatterDepth) of its static value, so the reflections shimmer and shift instead of standing still; the clean pass-through is not animated. On a HotHouse the early.envelope toggle picks Scatter (down), neither (middle) or Bloom (up). This is the first sound of the room, before the dense tail.",
   },
   ediff: {
     title: "EARLY DIFFUSER",
@@ -109,8 +112,8 @@ export const BLOCKS: Record<BlockId, BlockInfo> = {
     title: "DELAY LINES",
     short: "DELAY LINES",
     page: "late",
-    keys: ["delay_lines.max", "late.LateStageTap"],
-    text: "The reverb tail: identical recirculating delay lines running in parallel, how many set by the LINES switch (the preset's default or max, up to 5). Each line has its own seeded length, so their echoes interleave into a dense decay. The outputs are summed and scaled by 1/sqrt(N), so more lines thicken the tail without making it louder, at a CPU cost. LateStageTap moves each line's output: off, the tail is heard after the line's delay; on, before it (straight after the late diffuser), so the tail starts one LineDelay sooner.",
+    keys: ["delay_lines.max", "delay_lines.select", "late.LateStageTap"],
+    text: "The reverb tail: identical recirculating delay lines running in parallel, how many set by the LINES switch (the preset's default or max, up to 5; a HotHouse toggle also offers a single line). Each line has its own seeded length, so their echoes interleave into a dense decay. The outputs are summed and scaled by 1/sqrt(N), so more lines thicken the tail without making it louder, at a CPU cost. LateStageTap moves each line's output: off, the tail is heard after the line's delay; on, before it (straight after the late diffuser), so the tail starts one LineDelay sooner.",
   },
   delay: {
     title: "LINE DELAY",
@@ -200,7 +203,7 @@ export const BLOCKS: Record<BlockId, BlockInfo> = {
     short: "OUT",
     page: "output",
     keys: [],
-    text: "The pedal output. In bypass the input is copied straight here, but the reverb keeps running. The diagram shows the preset as it sounds with the pedal on, in its stored state; the pedal's switches can change it live.",
+    text: "The pedal output. The pedal is mono: on a HotHouse the same signal goes to both outputs. In bypass the input is copied straight here, but the reverb keeps running. The diagram shows the preset as it sounds with the pedal on, in its stored state; the pedal's switches can change it live.",
   },
 };
 
@@ -217,6 +220,10 @@ export const EFFECT: Record<string, string> = {
   "early.TapGain": "Higher: more reflections, less clean signal through the tap stage.",
   "early.TapDecay": "Higher: later taps fade more (at 1 the last tap is 40 dB down).",
   "early.Bloom": "On: the taps swell toward the end instead of fading.",
+  "early.Scatter": "On: each tap's level wavers on its own slow LFO - moving, shimmering reflections.",
+  "early.ScatterRate": "Faster: the tap levels waver quicker (0.1-5 Hz).",
+  "early.ScatterDepth": "Deeper: the taps dip further (1 = down to silence); 0 = static.",
+  "early.envelope": "Down: Scatter; middle: neither; up: Bloom (three-position toggle).",
   "early_diffusion.DiffusionEnabled": "On: the taps are smeared into a smooth wash.",
   "early_diffusion.DiffusionStages": "2 stages: a denser smear than 1.",
   "early_diffusion.DiffusionDelay": "Longer: a slower, more blurred onset.",
@@ -255,8 +262,25 @@ export const EFFECT: Record<string, string> = {
   "reverse.delay": "Longer: longer reversed phrases.",
   "reverse.enabled": "On: the reverse voice plays.",
   "reverse.direct_mix": "On: the reversed reverb is heard directly; off: the reverse feeds the reverb.",
+  "reverse.mode": "Down: reverse off; middle: into the reverb; up: direct mix (three-position toggle).",
   "delay_lines.max": "On: the MAX line count from SETUP instead of DEFAULT - a denser tail, more CPU.",
+  "delay_lines.select": "ONE line, the DEFAULT or the MAX line count from SETUP - more lines, a denser tail, more CPU.",
 };
+
+/**
+ * Stored values a toggle target sets besides a key of its own name: the three-way targets drive
+ * two keys, and the delay-line targets drive whichever delay_lines key the board stores.
+ */
+const DRIVES: Record<string, string[]> = {
+  "early.envelope": ["early.Scatter", "early.Bloom"],
+  "reverse.mode": ["reverse.enabled", "reverse.direct_mix"],
+  "delay_lines.max": ["delay_lines.select"],
+  "delay_lines.select": ["delay_lines.max"],
+};
+
+/** The keys of `keys` this preset stores: a preset holds one of the two delay_lines keys. */
+export const presentKeys = (keys: readonly string[], preset: Preset): string[] =>
+  keys.filter((k) => k in preset.params);
 
 const BLOCK_IDS = Object.keys(BLOCKS) as BlockId[];
 
@@ -269,19 +293,21 @@ export function badgesFor(preset: Preset, key: string): string[] {
   ] as const) {
     map.forEach((bank, b) => {
       bank.forEach((t, k) => {
-        if (t === key) out.push(`${prefix}${k + 1}${b ? "B" : "A"}`);
+        if (t === key || DRIVES[t]?.includes(key)) out.push(`${prefix}${k + 1}${b ? "B" : "A"}`);
       });
     });
   }
   return out;
 }
 
-/** Every block that owns `key`, in BLOCKS declaration order. */
+/** Every block that owns `key` (or a key it drives, for a pseudo-target), in BLOCKS declaration order. */
 export function blocksOfKey(key: string): BlockId[] {
-  return BLOCK_IDS.filter((id) => BLOCKS[id].keys.includes(key));
+  const keys = [key, ...(DRIVES[key] ?? [])];
+  return BLOCK_IDS.filter((id) => keys.some((k) => BLOCKS[id].keys.includes(k)));
 }
 
-// Every PARAM_KEYS key is present in preset.params: loadBank() rejects a preset missing one.
+// Every PARAM_KEYS key except the other board's delay_lines key is present in preset.params:
+// loadBank() rejects a preset missing one.
 
 /** Whether the block is in the signal path with the preset's stored switch states. */
 export function blockOn(id: BlockId, preset: Preset): boolean {
@@ -294,6 +320,8 @@ export function blockOn(id: BlockId, preset: Preset): boolean {
 
 /** Active delay lines, as updateEngineControls() in src/cloudseed.cpp selects them. */
 export function lineCount(preset: Preset): number {
+  const select = preset.params["delay_lines.select"];
+  if (select !== undefined) return select === 0 ? 1 : select === 1 ? preset.maxDelayLines : preset.defaultDelayLines;
   return isOn(preset.params["delay_lines.max"]!) ? preset.maxDelayLines : preset.defaultDelayLines;
 }
 

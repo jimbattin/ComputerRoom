@@ -3,7 +3,19 @@
 // serializes byte-identically (same pedal hash, minimal git diffs).
 
 import { parse } from "smol-toml";
-import { GROUP_NAMES, GROUPS, groupOf, PARAMETER_ORDER, RUNTIME_PARAMETER, TOGGLE_PARAMS } from "./schema";
+import {
+  type Board,
+  delayLinesKey,
+  GROUP_NAMES,
+  GROUPS,
+  groupOf,
+  isBoard,
+  PARAMETER_ORDER,
+  RUNTIME_PARAMETER,
+  THREE_WAY_TARGETS,
+  TOGGLE_PARAMS,
+  toggleCount,
+} from "./schema";
 
 const MAX_TEXT_BYTES = 98304; // PresetProtocol::kMaxTextBytes
 export const MAX_PRESETS = 16; // kMaxPresets
@@ -22,7 +34,7 @@ export interface Preset {
   params: Record<string, number>;
   /** [0] = _a, [1] = _b; knob 0..5. */
   knobMap: [string[], string[]];
-  /** [0] = _a, [1] = _b; toggle 0..3. */
+  /** [0] = _a, [1] = _b; toggle 0..toggleCount(board)-1. */
   toggleMap: [string[], string[]];
 }
 
@@ -48,7 +60,7 @@ export interface BankDoc {
   presets: PresetBlock[];
 }
 
-export type LoadResult = { ok: true; doc: BankDoc; presets: Preset[] } | { ok: false; error: string };
+export type LoadResult = { ok: true; doc: BankDoc; presets: Preset[]; board: Board } | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------------------------
 // Text layout
@@ -160,7 +172,7 @@ function readPseudo(t: Table, group: string, key: string, index: number): number
   return v;
 }
 
-function parseParams(preset: Table, index: number, out: Record<string, number>): void {
+function parseParams(preset: Table, board: Board, index: number, out: Record<string, number>): void {
   const params = preset.params;
   if (!isTable(params)) throw new Reject(`preset ${index}: missing [preset.params]`);
   rejectUnknownKeys(params, GROUP_NAMES, `preset ${index}: [preset.params]: `);
@@ -203,10 +215,17 @@ function parseParams(preset: Table, index: number, out: Record<string, number>):
   for (const key of ["delay", "enabled", "direct_mix"])
     out[`reverse.${key}`] = readPseudo(reverse, "reverse", key, index);
 
+  // Terrarium: `max` (Max when >= 0.5, else Default). HotHouse: `select`, exactly 0 / 0.5 / 1
+  // (One / Default / Max), compared as the float the firmware stores.
   const delayLines = params.delay_lines;
   if (!isTable(delayLines)) throw new Reject(`preset ${index}: missing [preset.params.delay_lines]`);
-  rejectUnknownKeys(delayLines, ["max"], `preset ${index}: [preset.params.delay_lines]: `);
-  out["delay_lines.max"] = readPseudo(delayLines, "delay_lines", "max", index);
+  const key = delayLinesKey(board);
+  rejectUnknownKeys(delayLines, [key], `preset ${index}: [preset.params.delay_lines]: `);
+  const stored = readPseudo(delayLines, "delay_lines", key, index);
+  if (board === "hothouse" && ![0, 0.5, 1].includes(Math.fround(stored))) {
+    throw new Reject(`preset ${index}: 'delay_lines.select' must be 0, 0.5 or 1`);
+  }
+  out[`delay_lines.${key}`] = stored;
 }
 
 /** splitTarget + resolveParamTarget: "group.Parameter" naming a file-controlled parameter. */
@@ -235,15 +254,23 @@ function parseKnobTarget(text: string, key: string, index: number): void {
   resolveParamTarget(text, group, name, "knob_map", key, index);
 }
 
-function parseToggleTarget(text: string, key: string, index: number): void {
+function parseToggleTarget(text: string, board: Board, key: string, index: number): void {
   const [group, name] = splitTarget(text, "toggle_map", key, index);
+  let known = true;
   if (group === "delay_lines") {
-    if (name !== "max") throw new Reject(`preset ${index}: toggle_map: ${key}: 'delay_lines' has only 'max'`);
-    return;
+    if (name !== "max" && name !== "select") {
+      throw new Reject(`preset ${index}: toggle_map: ${key}: 'delay_lines' toggles only 'max' or 'select'`);
+    }
+  } else if (group === "reverse") {
+    if (name !== "enabled" && name !== "direct_mix" && name !== "mode") {
+      throw new Reject(`preset ${index}: toggle_map: ${key}: 'reverse' toggles only 'enabled', 'direct_mix' or 'mode'`);
+    }
+  } else if (group !== "early" || name !== "envelope") {
+    known = false;
   }
-  if (group === "reverse") {
-    if (name !== "enabled" && name !== "direct_mix") {
-      throw new Reject(`preset ${index}: toggle_map: ${key}: 'reverse' toggles only 'enabled' or 'direct_mix'`);
+  if (known) {
+    if (THREE_WAY_TARGETS.includes(text) && board !== "hothouse") {
+      throw new Reject(`preset ${index}: toggle_map: ${key}: '${text}' needs a three-position toggle`);
     }
     return;
   }
@@ -303,7 +330,7 @@ function readLineCount(preset: Table, key: string, index: number): number {
   return lines;
 }
 
-function parsePreset(preset: Table, index: number): Preset {
+function parsePreset(preset: Table, board: Board, index: number): Preset {
   rejectUnknownKeys(preset, PRESET_KEYS, `preset ${index}: `);
 
   const name = preset.name;
@@ -329,9 +356,11 @@ function parsePreset(preset: Table, index: number): Preset {
   }
 
   const params: Record<string, number> = {};
-  parseParams(preset, index, params);
+  parseParams(preset, board, index, params);
   const knobMap = parseMap(preset, index, "knob_map", 6, parseKnobTarget);
-  const toggleMap = parseMap(preset, index, "toggle_map", 4, parseToggleTarget);
+  const toggleMap = parseMap(preset, index, "toggle_map", toggleCount(board), (text, key, i) =>
+    parseToggleTarget(text, board, key, i),
+  );
 
   return {
     name,
@@ -379,7 +408,17 @@ function fieldKeys(preset: Table): string[] {
   return out;
 }
 
-function validate(text: string): { doc: BankDoc; presets: Preset[] } {
+/** checkBoard: the root `board` key, checked before anything else in the document. */
+function checkBoard(root: Table, board: Board): void {
+  const value = root.board;
+  if (typeof value !== "string") throw new Reject(`missing board = "${board}"`);
+  // The firmware copies the name into a 16-byte buffer for its messages.
+  const name = value.slice(0, 15);
+  if (!isBoard(value)) throw new Reject(`board '${name}' is not "terrarium" or "hothouse"`);
+  if (value !== board) throw new Reject(`bank is for board "${name}", this pedal is "${board}"`);
+}
+
+function validate(text: string, pedal: Board | undefined): { doc: BankDoc; presets: Preset[]; board: Board } {
   const bytes = new TextEncoder().encode(text);
   if (bytes.length === 0) throw new Reject("empty preset text");
   if (bytes.includes(0)) throw new Reject("NUL byte in preset text");
@@ -395,16 +434,20 @@ function validate(text: string): { doc: BankDoc; presets: Preset[] } {
     throw new Reject(`toml: ${String((e as Error).message).split("\n")[0]}`);
   }
 
+  // Without a pedal to check against, the bank is read for the board it names (else a Terrarium).
+  const board = pedal ?? (isBoard(root.board) ? root.board : "terrarium");
+  checkBoard(root, board);
+
   const array = root.preset;
   if (!Array.isArray(array)) throw new Reject("missing [[preset]] array");
   if (array.length < 1 || array.length > MAX_PRESETS) {
     throw new Reject(`preset count ${array.length} out of range 1..${MAX_PRESETS}`);
   }
-  rejectUnknownKeys(root, ["preset"], "");
+  rejectUnknownKeys(root, ["board", "preset"], "");
 
   const presets = array.map((p, i) => {
     if (!isTable(p)) throw new Reject(`preset ${i}: not a table`);
-    return parsePreset(p, i);
+    return parsePreset(p, board, i);
   });
 
   const doc = scanDoc(text);
@@ -418,12 +461,17 @@ function validate(text: string): { doc: BankDoc; presets: Preset[] } {
       }
     }
   });
-  return { doc, presets };
+  return { doc, presets, board };
 }
 
-export function loadBank(text: string): LoadResult {
+/**
+ * Parses and validates `text` as ParsePresetBankText() does on a pedal of board `pedal`. Without
+ * `pedal`, the bank is checked for the board its `board` key names (a Terrarium if that key is
+ * missing or unknown), so the result's `board` is the bank's own.
+ */
+export function loadBank(text: string, pedal?: Board): LoadResult {
   try {
-    return { ok: true, ...validate(text) };
+    return { ok: true, ...validate(text, pedal) };
   } catch (e) {
     if (e instanceof Reject) return { ok: false, error: e.message };
     throw e;

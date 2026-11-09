@@ -138,6 +138,7 @@ namespace CloudSeed
 			update(Parameter::EarlyDiffusionModRate);
 			update(Parameter::LineModRate);
 			update(Parameter::LateDiffusionModRate);
+			update(Parameter::ScatterRate);
 			update(Parameter::LineModAmount);
 			UpdateLines();
 		}
@@ -188,6 +189,15 @@ namespace CloudSeed
 				break;
 			case Parameter::Bloom:
 				multitap.SetBloom((bool)value);
+				break;
+			case Parameter::Scatter:
+				multitap.SetScatter(value >= 0.5);
+				break;
+			case Parameter::ScatterRate:
+				multitap.SetScatterRate(value / samplerate);
+				break;
+			case Parameter::ScatterDepth:
+				multitap.SetScatterDepth(value);
 				break;
 
 			case Parameter::DiffusionEnabled:

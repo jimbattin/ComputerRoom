@@ -1,4 +1,6 @@
 # Test fixture for tests/preset_bank_test.cpp; not firmware data.
+board = "terrarium"
+
 # --------------------------------------------------------------------------
 [[preset]]
 name = "Chorus"
@@ -53,6 +55,9 @@ TapLength = 1.0
 TapGain   = 1.0
 TapDecay  = 0.86500012874603271
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -173,6 +178,9 @@ TapLength = 1.0
 TapGain   = 1.0
 TapDecay  = 0.71000003814697266
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]

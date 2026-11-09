@@ -1,5 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { createSysexAssembler, decodeInfo, fnv1a32, getU32, parseReply, u21, u32 } from "./protocol";
+import {
+  createSysexAssembler,
+  decodeInfo,
+  fnv1a32,
+  getU32,
+  parseIdentityReply,
+  parseReply,
+  u21,
+  u32,
+} from "./protocol";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -67,5 +76,23 @@ describe("SysEx assembler", () => {
     const { out, feed } = collect();
     feed(Uint8Array.from([0xf0, 0x11, 0xf0, 0x22, 0xf7]));
     expect(out).toEqual([[0xf0, 0x22, 0xf7]]);
+  });
+});
+
+describe("Identity Reply", () => {
+  const reply = (member: number, build = "1a2b3c4+dirty") =>
+    Uint8Array.from([0xf0, 0x7e, 0x7f, 0x06, 0x02, 0x7d, 0x43, 0x53, member, 0, 0, 0, 0, 0, ...enc(build), 0xf7]);
+
+  it("reads the member byte as the board, anything unknown as a Terrarium", () => {
+    expect(parseIdentityReply(reply(0))).toEqual({ board: "terrarium", buildId: "1a2b3c4+dirty" });
+    expect(parseIdentityReply(reply(1))).toEqual({ board: "hothouse", buildId: "1a2b3c4+dirty" });
+    expect(parseIdentityReply(reply(0x22))?.board).toBe("terrarium");
+  });
+
+  it("ignores other devices' replies and our protocol frames", () => {
+    const foreign = reply(1);
+    foreign[5] = 0x41;
+    expect(parseIdentityReply(foreign)).toBeNull();
+    expect(parseIdentityReply(Uint8Array.from([0xf0, 0x7d, 0x43, 0x53, 0x41, 0x00, 0xf7]))).toBeNull();
   });
 });

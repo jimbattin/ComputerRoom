@@ -82,6 +82,11 @@ enum class Parameter
 	// Effects
 	Interpolation,
 
+	// Early tap animation (MultitapDiffuser): each tap's gain is LFO-modulated
+	Scatter,
+	ScatterRate,
+	ScatterDepth,
+
 	Count,
 
 	Unused = 999

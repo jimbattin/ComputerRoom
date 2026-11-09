@@ -6,10 +6,11 @@ import { ProgramKeys } from "./components/ProgramKeys";
 import { KnobMapPage, PageKeys, ParamPage, SetupPage, ToggleMapPage } from "./components/pages";
 import { openTomlFile, projectPresets, saveTomlFile } from "./io/files";
 import { PresetLink } from "./midi/client";
-import { fnv1a32, type InfoReply, ProtocolError } from "./midi/protocol";
+import { fnv1a32, type Identity, type InfoReply, ProtocolError } from "./midi/protocol";
 import { connectPedal, isWebMidiSupported } from "./midi/webMidi";
 import { docText, loadBank } from "./model/bank";
 import { BLOCKS, type BlockId } from "./model/flow";
+import type { Board } from "./model/schema";
 import { initialState, isDirty, presetChanges, problems, reducer, type Source } from "./model/state";
 
 interface Confirm {
@@ -28,6 +29,10 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [info, setInfo] = useState<InfoReply | null>(null);
+  /** The linked pedal's board and build; null until CONNECT. */
+  const [identity, setIdentity] = useState<Identity | null>(null);
+  /** Which board's built-in bank PROJECT loads while no pedal is linked. */
+  const [projectBoard, setProjectBoard] = useState<Board>("terrarium");
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   /** Parameter hovered or focused in the page controls, lit in the flow diagram. */
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -79,11 +84,18 @@ export function App() {
 
   const discardOk = () => (dirty ? ask("Unsaved edits", "Discard unsaved edits?", "Discard") : Promise.resolve(true));
 
-  const load = (text: string, source: Source, fileName: string | null) =>
-    dispatch({ type: "load", text, source, fileName });
+  const load = (text: string, source: Source, fileName: string | null, board?: Board) =>
+    dispatch({ type: "load", text, source, fileName, board });
 
-  /** The bank text, if the pedal's own rules accept it; otherwise reports why. */
-  function checkedText(): string | null {
+  /** The linked pedal's board; null while no pedal is linked. */
+  const pedalBoard = connected && identity ? identity.board : null;
+
+  /**
+   * The bank text, if the pedal's own rules accept it; otherwise reports why. With `board` the
+   * bank is checked as that pedal checks it, so a bank for the other board is refused with the
+   * pedal's own message (`bank is for board "hothouse", this pedal is "terrarium"`).
+   */
+  function checkedText(board?: Board): string | null {
     if (!doc) {
       setStatus("NO BANK");
       return null;
@@ -94,7 +106,7 @@ export function App() {
       return null;
     }
     const text = docText(doc);
-    const r = loadBank(text);
+    const r = loadBank(text, board);
     if (!r.ok) {
       setStatus(r.error);
       return null;
@@ -104,7 +116,7 @@ export function App() {
 
   const onProject = () =>
     run(async () => {
-      if (await discardOk()) load(projectPresets, "project", null);
+      if (await discardOk()) load(projectPresets[pedalBoard ?? projectBoard], "project", null);
     });
 
   const onOpen = () =>
@@ -125,8 +137,12 @@ export function App() {
     run(async () => {
       setConnected(false);
       setInfo(null);
+      setIdentity(null);
       const next = new PresetLink(await connectPedal());
+      const id = await next.identify();
       setInfo(await next.info());
+      setIdentity(id);
+      setProjectBoard(id.board);
       setLink(next);
       setConnected(true);
     });
@@ -135,15 +151,16 @@ export function App() {
     run(async () => {
       if (!link || !(await discardOk())) return;
       const text = await link.readAll((d, t) => setStatus(`READ ${pct(d, t)}%`));
-      load(text, "pedal", null);
+      load(text, "pedal", null, pedalBoard ?? undefined);
       setInfo(await link.info());
       setStatus(null);
     });
 
   const onUpload = () =>
     run(async () => {
-      const text = checkedText();
-      if (!link || text === null) return;
+      if (!link) return;
+      const text = checkedText(pedalBoard ?? "terrarium");
+      if (text === null) return;
       const ok = await ask(
         "Upload bank",
         "Upload to the pedal? The pedal reboots (about 3 s), the output is dry during the upload, and sounds saved on the pedal (FS1 hold) are erased.",
@@ -175,6 +192,7 @@ export function App() {
     } else {
       setConnected(false);
       setInfo(null);
+      setIdentity(null);
       setStatus(unverified);
     }
   }
@@ -197,13 +215,20 @@ export function App() {
         </div>
         <div class="main-display">
           <Led wide text={display} />
-          <Led small off={!dirty && !origin} text={[dirty ? "EDITED" : "", origin].filter(Boolean).join("  ") || "-"} />
+          <Led
+            small
+            off={!dirty && !origin}
+            text={
+              [dirty ? "EDITED" : "", origin, doc ? state.board.toUpperCase() : ""].filter(Boolean).join("  ") || "-"
+            }
+          />
         </div>
         <DevicePanel
           supported={supported}
           connected={connected}
           busy={busy}
           info={info}
+          identity={connected ? identity : null}
           inSync={inSync}
           onConnect={onConnect}
           onRead={onRead}
@@ -214,6 +239,17 @@ export function App() {
 
       <div class="row">
         <Key label="PROJECT" wide disabled={busy} onClick={onProject} />
+        <Key
+          label={(pedalBoard ?? projectBoard).toUpperCase()}
+          wide
+          disabled={busy || pedalBoard !== null}
+          title={
+            pedalBoard
+              ? "PROJECT loads the linked pedal's built-in bank"
+              : "Board whose built-in bank PROJECT loads (presets.toml or presets_hothouse.toml)"
+          }
+          onClick={() => setProjectBoard((b) => (b === "terrarium" ? "hothouse" : "terrarium"))}
+        />
         <Key label="OPEN" disabled={busy} onClick={onOpen} />
         <Key label="SAVE" disabled={busy || !doc} onClick={onSave} />
       </div>
@@ -239,9 +275,21 @@ export function App() {
                 }}
               />
               {page === "knobs" ? (
-                <KnobMapPage preset={preset} changes={selectedChanges} dispatch={dispatch} onHover={setFocusKey} />
+                <KnobMapPage
+                  preset={preset}
+                  board={state.board}
+                  changes={selectedChanges}
+                  dispatch={dispatch}
+                  onHover={setFocusKey}
+                />
               ) : page === "toggles" ? (
-                <ToggleMapPage preset={preset} changes={selectedChanges} dispatch={dispatch} onHover={setFocusKey} />
+                <ToggleMapPage
+                  preset={preset}
+                  board={state.board}
+                  changes={selectedChanges}
+                  dispatch={dispatch}
+                  onHover={setFocusKey}
+                />
               ) : page === "setup" ? (
                 <SetupPage preset={preset} changes={selectedChanges} dispatch={dispatch} />
               ) : (
@@ -267,7 +315,9 @@ export function App() {
           />
         </>
       ) : (
-        <p class="hint">Load the project presets.toml, open a file, or connect the pedal and READ.</p>
+        <p class="hint">
+          Load the project presets.toml (pick the board first), open a file, or connect the pedal and READ.
+        </p>
       )}
 
       {confirm && (

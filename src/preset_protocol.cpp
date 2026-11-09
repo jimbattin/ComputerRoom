@@ -108,11 +108,12 @@ size_t PackSysExUsbMidi(const uint8_t* msg, size_t len, uint8_t* out, size_t out
  */
 
 void PresetProtocol::Init(char* rxBuffer, BankValidator validate, const ActiveBank& active,
-                          const char* buildId) {
+                          const char* buildId, uint8_t board) {
     rx_       = rxBuffer;
     validate_ = validate;
     active_   = active;
     buildId_  = buildId;
+    board_    = board & 0x7F;
     session_  = false;
     replyLen_ = 0;
 }
@@ -135,8 +136,10 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
     if (len == 4 && frame[0] == 0x7E && frame[2] == 0x06 && frame[3] == 0x01) {
         // Identity Reply. Not a session message: the session timer is untouched.
         static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, kSysExManufacturer,
-                                        kSysExTag0, kSysExTag1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+                                        kSysExTag0, kSysExTag1};
         for (uint8_t b : kHead) put(b);
+        put(board_);  // member, LSB first
+        for (int i = 0; i < 5; i++) put(0x00);  // member MSB, version
         size_t n = 0;
         for (const char* p = buildId_; p && *p && n < kMaxBuildId; ++p, ++n)
             put(*p >= 0x20 && *p <= 0x7E ? static_cast<uint8_t>(*p) : '?');

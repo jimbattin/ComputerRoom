@@ -44,6 +44,25 @@ describe("App", () => {
     expect(container.querySelector(".flow-params tr.focus td")!.textContent).toBe("DRY");
   });
 
+  it("loads the HotHouse project bank with three three-position toggles", async () => {
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "TERRARIUM" }));
+    fireEvent.click(screen.getByRole("button", { name: "PROJECT" }));
+    await waitFor(() => expect(mainLed(container)).toMatch(/^P01 /));
+    expect(screen.getByText(/PROJECT HOTHOUSE/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "SWITCH" }));
+    const cols = [...container.querySelectorAll(".map-grid.toggles .map-col > .silk")].map((el) => el.textContent);
+    expect(cols).toEqual(["TOGGLE 1", "TOGGLE 2", "TOGGLE 3"]);
+    expect(container.querySelector(".toggle-pos")!.textContent).toBe("DOWN 1 LINEMIDDLE DEFAULTUP MAX");
+
+    fireEvent.click(screen.getByRole("button", { name: "REV/LN" }));
+    expect(screen.getByRole("button", { name: "DEF" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "ONE" }));
+    expect(screen.getByRole("button", { name: "ONE" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(/EDITED/)).toBeTruthy();
+  });
+
   it("reports a browser without Web MIDI", () => {
     render(<App />);
     expect(screen.getByText(/NO WEB MIDI/)).toBeTruthy();

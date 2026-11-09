@@ -331,6 +331,12 @@ html {
   align-items: center;
 }
 
+.larc .strip .switch-slot.three-way {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
 /* Vertical fader: max at the top. Thumb and track are styled identically for both engines. */
 .larc .strip input[type="range"] {
   writing-mode: vertical-lr;
@@ -407,6 +413,27 @@ html {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* HotHouse: three three-position toggles. */
+.larc .map-grid.toggles.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Under a toggle target: what each lever position selects. */
+.larc .toggle-pos {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.8rem;
+  padding-left: 2.15rem;
+  font-family: var(--larc-mono);
+  font-size: 0.65rem;
+  color: var(--larc-led);
+}
+
+.larc .toggle-pos .pos {
+  color: var(--larc-silk);
+}
+
 .larc .map-col select.led {
   font-size: 0.75rem;
   padding: 0.35rem 2rem 0.35rem 0.5rem;
@@ -428,6 +455,7 @@ html {
 
 .larc .map-slot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem;
 }

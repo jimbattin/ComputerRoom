@@ -76,3 +76,32 @@ export function SwitchStrip({ def, value, preset, badges, onChange, original, on
     </div>
   );
 }
+
+/** The three stored states of delay_lines.select (HotHouse): one line, default, max. */
+const SELECT3 = [
+  { value: 0, label: "ONE" },
+  { value: 0.5, label: "DEF" },
+  { value: 1, label: "MAX" },
+] as const;
+
+export function ThreeWayStrip({ def, value, preset, badges, onChange, original, onHover }: StripProps) {
+  return (
+    <div class="strip" title={withOriginal(def.description, original)} {...hoverHandlers(def.key, onHover)}>
+      {original !== undefined && <span class="edit-mark" />}
+      <Led text={formatValue(def.key, value, preset)} />
+      <div class="switch-slot three-way">
+        {SELECT3.map((o) => (
+          <Key
+            key={o.label}
+            label={o.label}
+            pressed={value === o.value}
+            title={withOriginal(def.description, original)}
+            onClick={() => onChange(o.value)}
+          />
+        ))}
+      </div>
+      <span class="silk">{def.label}</span>
+      <span class="badges">{badges.join(" ")}</span>
+    </div>
+  );
+}

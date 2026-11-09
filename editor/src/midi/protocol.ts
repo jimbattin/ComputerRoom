@@ -1,6 +1,8 @@
 // USB-MIDI SysEx preset protocol v1. Normative definition: src/preset_protocol.h;
 // host guide: docs/USB_MIDI.md. Pure: no browser APIs.
 
+import type { Board } from "../model/schema";
+
 export const CMD = { INFO: 1, BEGIN: 2, DATA: 3, COMMIT: 4, REVERT: 5, READ: 6, ABORT: 7 } as const;
 
 export const CMD_NAMES: Record<number, string> = Object.fromEntries(
@@ -96,6 +98,30 @@ export class ProtocolError extends Error {
     this.name = "ProtocolError";
     this.status = status;
   }
+}
+
+/** Universal Non-Real-Time Identity Request, addressed to all devices (7F). */
+export const IDENTITY_REQUEST = Uint8Array.from([0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7]);
+
+export interface Identity {
+  /** From the member code: 00 Terrarium, 01 HotHouse; any other value is read as a Terrarium. */
+  board: Board;
+  buildId: string;
+}
+
+/**
+ * Our Identity Reply (`F0 7E 7F 06 02 7D 43 53 <member> 00 <version x4> <build id> F7`, see
+ * src/preset_protocol.h), or null for any other message. Firmware from before the HotHouse
+ * port always sent member 00, which reads as a Terrarium.
+ */
+export function parseIdentityReply(msg: Uint8Array): Identity | null {
+  if (msg.length < 15 || msg[0] !== 0xf0 || msg[msg.length - 1] !== 0xf7) return null;
+  if (msg[1] !== 0x7e || msg[3] !== 0x06 || msg[4] !== 0x02) return null;
+  if (msg[5] !== HEADER[0] || msg[6] !== HEADER[1] || msg[7] !== HEADER[2]) return null;
+  return {
+    board: msg[8] === 1 ? "hothouse" : "terrarium",
+    buildId: String.fromCharCode(...msg.slice(14, -1)),
+  };
 }
 
 /**

@@ -19,7 +19,7 @@ Over that port, MIDI System Exclusive (SysEx) messages can:
   without pressing any button.
 
 It also answers the standard MIDI Identity Request (section 7, "Identity Request") with the
-firmware's build id.
+board the firmware was built for (Terrarium or HotHouse) and its build id.
 
 The pedal keeps working as a pedal throughout, except during an upload (see section 3).
 
@@ -49,7 +49,10 @@ The pedal keeps working as a pedal throughout, except during an upload (see sect
 - **Validation.** The pedal checks the text with the same parser `make presets-check` uses,
   before anything is written to flash. A rejected text changes nothing, and the reply carries
   the parser's message. The rules are those listed in the header of `presets.toml`; in short:
-  ASCII only, 1 to 16 presets, every parameter present and within 0.0 to 1.0.
+  ASCII only, a root key `board` naming the pedal's own board (`"terrarium"` or
+  `"hothouse"`), 1 to 16 presets, every parameter present and within 0.0 to 1.0. A bank
+  written for the other board is rejected with `bank is for board "<file>", this pedal is
+  "<this>"`; read the board from the Identity Reply first.
 
 ## 4. Message format
 
@@ -275,12 +278,14 @@ The standard Universal Non-Real-Time Identity Request, with any device id (`00`-
 
 ```
 host:  F0 7E 7F 06 01 F7
-pedal: F0 7E 7F 06 02 7D 43 53 00 00 00 00 00 00 <build id> F7
+pedal: F0 7E 7F 06 02 7D 43 53 <board> 00 00 00 00 00 <build id> F7
 ```
 
 - `7D`: manufacturer (non-commercial).
 - `43 53`: family ("CS").
-- `00 00`: member (Terrarium, the only board).
+- `<board> 00`: member, LSB first. `<board>` (byte index 8 of the message, counting `F0` as
+  0) is the board the firmware was built for: `00` Terrarium, `01` HotHouse. A bank uploaded
+  to the pedal must carry the matching `board = "terrarium"` / `"hothouse"` root key.
 - `00 00 00 00`: software version (unused).
 - `<build id>`: 1 to 32 printable ASCII bytes: the short git commit the firmware was built
   from, with `+dirty` appended when tracked files differed from it, or `unknown` when it was

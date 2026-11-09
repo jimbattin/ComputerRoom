@@ -5,6 +5,22 @@ TARGET = cloudseed
 # to load our app into SRAM from QSPI Flash
 export APP_TYPE = BOOT_SRAM
 
+# Target pedal: terrarium (default) or hothouse (src/board.h). Each board builds into
+# its own directory, build/<board>/, and embeds its own preset bank.
+BOARD ?= terrarium
+ifeq ($(BOARD),terrarium)
+BOARD_DEF    = -DCLOUDSEED_BOARD_TERRARIUM=1
+PRESETS_TOML = presets.toml
+else ifeq ($(BOARD),hothouse)
+BOARD_DEF    = -DCLOUDSEED_BOARD_HOTHOUSE=1
+PRESETS_TOML = presets_hothouse.toml
+else
+$(error BOARD must be terrarium or hothouse, not '$(BOARD)')
+endif
+# libdaisy's core/Makefile sets BUILD_DIR = build with plain `=` and creates it with a
+# `mkdir` that has no -p: override the former, create the parent for the latter.
+override BUILD_DIR = build/$(BOARD)
+
 # Sources
 # Source lists must be set before including the core Makefile: it evaluates
 # vpath directives at parse time (libdaisy/core/Makefile:278-284).
@@ -16,7 +32,7 @@ C_SOURCES += third_party/tomlc99/toml.c
 # an unchanged tree relinks nothing. kBuildId is non-const with a fixed size: it lands in .data, outside
 # the _stext.._etext range firmwareImageHash() covers (src/pedal_storage.cpp), and a new id moves
 # nothing in that range, so a commit that changes no code keeps saved user presets and an uploaded bank.
-# BUILD_DIR is not defined until the core Makefile is included; it is "build" there.
+# BUILD_DIR is build/<board>; the build id is shared by both boards.
 BUILD_ID_HEAD := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null)
 BUILD_ID := $(if $(BUILD_ID_HEAD),$(BUILD_ID_HEAD)$(if $(shell git -C $(CURDIR) status --porcelain --untracked-files=no 2>/dev/null),+dirty),unknown)
 BUILD_ID_C := build/build_id.c
@@ -53,13 +69,12 @@ $(CLOUDSEED_LIB): FORCE
 FORCE:
 .PHONY: FORCE
 
-# Include terrarium.h
-C_INCLUDES += -I./Terrarium
+C_DEFS += $(BOARD_DEF)
 
 CPPFLAGS += -ffast-math
 
 C_INCLUDES += -I./third_party/tomlc99 -I. -I./src
-ASFLAGS += -Wa,-I,$(CURDIR)
+ASFLAGS += -Wa,-I,$(CURDIR) '-DPRESETS_TOML_FILE="$(PRESETS_TOML)"'
 
 # Host toolchain for the preset validator (overridable for odd environments).
 HOSTCC  ?= gcc
@@ -69,28 +84,28 @@ $(BUILD_DIR)/toml_host.o: third_party/tomlc99/toml.c | $(BUILD_DIR)
 	$(HOSTCC) -std=gnu11 -O1 -Ithird_party/tomlc99 -c -o $@ $<
 
 $(BUILD_DIR)/preset_check: tools/preset_check.cpp src/preset_bank.cpp src/preset_bank.h \
-		CloudSeed/DelayLineCount.h $(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
+		CloudSeed/DelayLineCount.h CloudSeed/Parameter.h CloudSeed/ParameterNames.h \
+		$(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
 	$(HOSTCXX) -std=gnu++14 -O1 -I. -Isrc -Ithird_party/tomlc99 -o $@ \
 		tools/preset_check.cpp src/preset_bank.cpp $(BUILD_DIR)/toml_host.o
 
-# Schema gate: presets.toml is validated with the firmware's own parser before
-# it can be embedded. A file that fails here never reaches the pedal, where the
-# only symptom would be FatalErrorLoop().
-$(BUILD_DIR)/presets.valid: presets.toml $(BUILD_DIR)/preset_check
-	./$(BUILD_DIR)/preset_check --validate presets.toml
+# Schema gate: the board's preset bank is validated with the firmware's own parser
+# before it can be embedded. A file that fails here never reaches the pedal, where
+# the only symptom would be FatalErrorLoop().
+$(BUILD_DIR)/presets.valid: $(PRESETS_TOML) $(BUILD_DIR)/preset_check
+	./$(BUILD_DIR)/preset_check --board $(BOARD) --validate $(PRESETS_TOML)
 	@touch $@
 
 # Re-assemble the embedded blob whenever the preset data changes, and only after
 # it has passed validation.
-$(BUILD_DIR)/presets_toml.o: presets.toml $(BUILD_DIR)/presets.valid
+$(BUILD_DIR)/presets_toml.o: $(PRESETS_TOML) $(BUILD_DIR)/presets.valid
 
-# Manual check of presets.toml without building firmware. Fails only if the
-# firmware's own parser would reject the file (see src/preset_bank.cpp); preset
-# values themselves are free to change. Always re-runs, unlike the stamp above.
+# Manual check of both boards' banks without building firmware. Fails only if the
+# firmware's own parser would reject a file (see src/preset_bank.cpp); preset values
+# themselves are free to change. Always re-runs, unlike the stamp above.
 presets-check: $(BUILD_DIR)/preset_check
-	./$(BUILD_DIR)/preset_check --validate presets.toml
-
-.PHONY: presets-check
+	./$(BUILD_DIR)/preset_check --board terrarium --validate presets.toml
+	./$(BUILD_DIR)/preset_check --board hothouse --validate presets_hothouse.toml
 
 # Host unit tests for the host-portable modules (knob/toggle/footswitch state
 # machines, preset parser, USB preset protocol, stored-bank check) and the reverb
@@ -130,7 +145,7 @@ test: $(HOST_TESTS)
 	./$(BUILD_DIR)/knob_bank_test
 	./$(BUILD_DIR)/toggle_bank_test
 	./$(BUILD_DIR)/footswitch_gestures_test
-	./$(BUILD_DIR)/preset_bank_test tests/fixtures/two_presets.toml
+	./$(BUILD_DIR)/preset_bank_test tests/fixtures/two_presets.toml tests/fixtures/two_presets_hothouse.toml
 	./$(BUILD_DIR)/engine_alloc_test
 	./$(BUILD_DIR)/preset_protocol_test tests/fixtures/two_presets.toml
 	./$(BUILD_DIR)/stored_bank_test
@@ -153,13 +168,13 @@ editor:
 	$(require_bun)
 	$(MAKE) -C editor serve BUN=$(BUN)
 
-# The whole editor - JS, CSS and the repo's presets.toml (PROJECT) - inlined into one
+# The whole editor - JS, CSS and both boards' preset banks - inlined into one
 # stand-alone HTML file that a browser can open straight from disk. editor/Makefile keeps
 # editor/dist/editor.html incremental; build/editor.html is the release copy.
-editor-html: | $(BUILD_DIR)
+editor-html:
 	$(require_bun)
 	$(MAKE) -C editor html BUN=$(BUN)
-	cp editor/dist/editor.html $(BUILD_DIR)/editor.html
+	cp editor/dist/editor.html build/editor.html
 
 .PHONY: editor editor-html
 

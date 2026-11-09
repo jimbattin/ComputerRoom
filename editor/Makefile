@@ -11,8 +11,8 @@ serve: $(STAMP)
 
 html: dist/editor.html
 
-# presets.toml is inlined (src/io/files.ts imports it as text).
-dist/editor.html: $(STAMP) build.ts $(shell find src -type f) ../presets.toml
+# Both built-in banks are inlined (src/io/files.ts imports them as text).
+dist/editor.html: $(STAMP) build.ts $(shell find src -type f) ../presets.toml ../presets_hothouse.toml
 	$(BUN) run build.ts
 
 test: $(STAMP)

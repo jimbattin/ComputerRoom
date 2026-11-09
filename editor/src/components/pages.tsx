@@ -1,12 +1,20 @@
 import type { Dispatch } from "preact/hooks";
 import { formatNorm, MAX_NAME_BYTES, type Preset, TOTAL_LINE_COUNT } from "../model/bank";
-import { badgesFor } from "../model/flow";
+import { badgesFor, presentKeys } from "../model/flow";
 import { formatValue } from "../model/scale";
-import { GROUP_NAMES, PAGES, PARAMS, type PageId } from "../model/schema";
+import {
+  type Board,
+  GROUP_NAMES,
+  PAGES,
+  PARAMS,
+  type PageId,
+  targetDescription,
+  togglePositions,
+} from "../model/schema";
 import {
   type Action,
-  MAPS,
   type MapKind,
+  mapSpec,
   type PresetChanges,
   SCALAR_PROP,
   type ScalarField,
@@ -14,7 +22,7 @@ import {
   sanitizeName,
 } from "../model/state";
 import { hoverHandlers, Key, NumberField, withOriginal } from "./controls";
-import { Fader, SwitchStrip } from "./Fader";
+import { Fader, SwitchStrip, ThreeWayStrip } from "./Fader";
 
 interface PageProps {
   preset: Preset;
@@ -67,12 +75,12 @@ export function ParamPage({
   dispatch,
   onHover,
 }: PageProps & { page: PageId; onHover: (key: string | null) => void }) {
-  const keys = PAGES.find((p) => p.id === page)!.keys;
+  const keys = presentKeys(PAGES.find((p) => p.id === page)!.keys, preset);
   return (
     <div class="fader-bank">
       {keys.map((key) => {
         const def = PARAMS[key]!;
-        const Strip = def.kind === "switch" ? SwitchStrip : Fader;
+        const Strip = def.kind === "switch" ? SwitchStrip : def.kind === "select3" ? ThreeWayStrip : Fader;
         const was = changes.original.params[key]!;
         return (
           <Strip
@@ -123,7 +131,7 @@ function TargetSelect({
     <select
       class="led"
       aria-label={label}
-      title={withOriginal(`${value}: ${PARAMS[value]!.description}`, original)}
+      title={withOriginal(`${value}: ${targetDescription(value)}`, original)}
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
     >
@@ -150,15 +158,31 @@ const BANKS = [
 ] as const;
 
 interface MapPageProps extends PageProps {
+  /** The bank's board: the toggle count, the toggle positions, and the valid targets. */
+  board: Board;
   /** Reports the target of the slot under the pointer or focus, null on leave. */
   onHover: (key: string | null) => void;
 }
 
-function MapPage({ preset, changes, kind, dispatch, onHover }: MapPageProps & { kind: MapKind }) {
-  const { prop, targets } = MAPS[kind];
+/** What each lever position of a toggle does with `target`. */
+function TogglePositions({ target, board }: { target: string; board: Board }) {
+  return (
+    <div class="toggle-pos">
+      {togglePositions(target, board).map((p) => (
+        <span key={p.pos} title={`${p.pos}: ${p.text}`}>
+          <span class="pos">{p.pos}</span> {p.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function MapPage({ preset, changes, kind, board, dispatch, onHover }: MapPageProps & { kind: MapKind }) {
+  const { prop, targets } = mapSpec(kind, board);
   const map = preset[prop];
   const originalMap = changes.original[prop];
-  const title = kind === "knob" ? "KNOB" : "SW";
+  const title = kind === "knob" ? "KNOB" : board === "hothouse" ? "TOGGLE" : "SW";
+  const gridClass = kind === "knob" ? "knobs" : board === "hothouse" ? "toggles three" : "toggles";
   return (
     <div>
       <div class="map-legend">
@@ -171,7 +195,7 @@ function MapPage({ preset, changes, kind, dispatch, onHover }: MapPageProps & { 
           </span>
         ))}
       </div>
-      <div class={`map-grid ${kind}s`}>
+      <div class={`map-grid ${gridClass}`}>
         {map[0].map((_, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: slots are positional: index i is knob or switch column i
           <div key={i} class="map-col panel">
@@ -195,6 +219,7 @@ function MapPage({ preset, changes, kind, dispatch, onHover }: MapPageProps & { 
                     original={edited ? originalMap[bank][i] : undefined}
                     onChange={(target) => dispatch({ type: "setTarget", kind, bank, slot: i, target })}
                   />
+                  {kind === "toggle" && <TogglePositions target={target} board={board} />}
                 </div>
               );
             })}

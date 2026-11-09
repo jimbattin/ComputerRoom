@@ -34,7 +34,8 @@ struct Settings {
 struct UserPreset {
     float    params[(int)::Parameter::Count];  // reverb->GetAllParameters() at save time
     float    reverseDelay;                     // state.reverseDelayNorm at save time
-    float    delayLinesMax;                    // state.delayLinesMax at save time, 0.0 or 1.0
+    float    delayLines;                       // state.delayLines at save time: 0.0 / 0.5 / 1.0
+                                               // = DelayLines_One / _Default / _Max
     float    reverseEnabled;                   // state.reverseEnabled at save time, 0.0 or 1.0
     float    reverseDirectMix;                 // state.reverseDirectMix at save time, 0.0 or 1.0
     uint32_t valid;                            // USER_PRESET_VALID, else load from presets.toml

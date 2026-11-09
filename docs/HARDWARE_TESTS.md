@@ -9,8 +9,12 @@ build flags, and before any release. Record the results in the log at the end.
 
 ## Prerequisites
 
-- **The pedal.** Terrarium pedal with a Daisy Seed running the Daisy bootloader
-  (`make program-boot` once).
+- **The pedal.** A Terrarium or HotHouse pedal with a Daisy Seed running the Daisy bootloader
+  (`make program-boot` once). Build and flash the matching target: `make` / `make
+  program-dfu` for Terrarium, `make BOARD=hothouse` / `make BOARD=hothouse program-dfu` for
+  HotHouse. Outputs land in `build/terrarium/` or `build/hothouse/`; below, `B` is that
+  board name (`B=terrarium` or `B=hothouse`). On a HotHouse, every `presets.toml` in H2-H9
+  means `presets_hothouse.toml`, and every plain `make` means `make BOARD=hothouse`.
 - **Connections.** A data-capable USB cable to the Seed's micro-USB port, plus a guitar or
   other audio source into the pedal and an amp or headphones on the output.
 - **Linux host tools.** ALSA (`amidi`), `dfu-util`, Python 3 and the Arm toolchain (see
@@ -30,9 +34,9 @@ The static checks (S3, S4) and the whine test (H11) compare against the previous
 the unmodified tree, before making any change:
 
 ```bash
-make 2>&1 | tee /tmp/baseline-build.txt
-cp build/cloudseed.bin /tmp/baseline.bin
-arm-none-eabi-objdump -d --no-show-raw-insn build/cloudseed.elf \
+make BOARD=$B 2>&1 | tee /tmp/baseline-build.txt
+cp build/$B/cloudseed.bin /tmp/baseline.bin
+arm-none-eabi-objdump -d --no-show-raw-insn build/$B/cloudseed.elf \
     | awk '/<_ZL13audioCallbackPKPKfPPfj>:/,/^$/' > /tmp/baseline-callback.txt
 ```
 
@@ -43,10 +47,11 @@ If you have already started editing, build the previous commit in a separate wor
 ## Static checks (no pedal)
 
 - **S1.** `make test`. Pass: every suite prints `N checks, 0 failed`.
-- **S2.** `make presets-check`. Pass: `presets.toml: 10 presets valid, …`.
+- **S2.** `make presets-check`. Pass: `presets.toml: 10 terrarium presets valid, …` and
+  `presets_hothouse.toml: 10 hothouse presets valid, …`.
 - **S3. Audio callback code.** Dump the new callback and compare its calls with the baseline:
   ```bash
-  arm-none-eabi-objdump -d --no-show-raw-insn build/cloudseed.elf \
+  arm-none-eabi-objdump -d --no-show-raw-insn build/$B/cloudseed.elf \
       | awk '/<_ZL13audioCallbackPKPKfPPfj>:/,/^$/' > /tmp/new-callback.txt
   calls() { grep -oE 'bl\s+[0-9a-f]+ <[^>]+>' "$1" | awk '{print $3}' | sort; }
   diff <(calls /tmp/baseline-callback.txt) <(calls /tmp/new-callback.txt) && echo SAME-CALLS
@@ -54,7 +59,7 @@ If you have already started editing, build the previous commit in a separate wor
   ```
   Pass: `SAME-CALLS`, unless the revision meant to add work to the callback. A large growth
   in line count needs an explanation.
-- **S4. Memory.** Run `make 2>&1 | tee /tmp/new-build.txt` and compare its memory table with
+- **S4. Memory.** Run `make BOARD=$B 2>&1 | tee /tmp/new-build.txt` and compare its memory table with
   `/tmp/baseline-build.txt`. Pass: every region is below 90 %, and every change is explained.
 
 ## Hardware tests
@@ -167,7 +172,8 @@ upload would therefore come back in step 5.
 
 ### H10. Audio headroom under USB traffic
 
-Select preset 9, "Through the Looking Glass", with SWITCH_1 on (4 delay lines, the heaviest
+Select preset 9, "Through the Looking Glass", with toggle 1 Up (SWITCH_1 on a Terrarium,
+`delay_lines.select` = max on a HotHouse; 4 delay lines, the heaviest
 shipped configuration), not bypassed, with audio playing through it.
 
 1. Listen for 30 s with the USB link idle.
@@ -208,7 +214,7 @@ position, so full CW stopped at about 0.969 and never reached the top rail.
 
 1. `$H identity`. Pass: `identity: manufacturer=7d family=43 53 member=00 00 version=00 00 00 00
    build=<id>`, where `<id>` is the string in `build/build_id.c` (the short commit, `+dirty`
-   if tracked files differed).
+   if tracked files differed). A HotHouse prints `member=01 00` (see H15).
 2. Burst DFU: find the card number N with `amidi -l`, then
    ```bash
    amidi -p hw:N,0,0 -S "F0 7D 70 01 06 F7 F0 7D 33 01 13 F7 F0 7D 43 53 08 F7"
@@ -223,6 +229,42 @@ position, so full CW stopped at about 0.969 and never reached the top rail.
    is outside the firmware hash).
 5. With the browser editor open (`make editor`) and connected, run `$H identity`. Pass: the
    editor keeps working.
+
+### H14. Terrarium switch pins (after the DaisyPetal removal)
+
+The app no longer goes through libdaisy's `DaisyPetal`; `src/board.h` reads the switches on
+the Seed pins directly (SWITCH_1..SWITCH_4 = D10, D9, D8, D7).
+
+1. On preset 1 (default map), flip each switch Up after a preset load (flip down and up if it
+   was already up: toggles are parked). Pass: SWITCH_1 raises the delay-line count (denser
+   tail), SWITCH_2 turns on Bloom, SWITCH_3 the reverse voice, SWITCH_4 moves the reverse from
+   the tail to the direct mix. A swapped pair means a wrong pin.
+2. Each knob moves its own default target (KNOB_1 dry ... KNOB_6 decay), and both
+   footswitches and LEDs behave as before.
+
+### H15. HotHouse
+
+Flash with `make BOARD=hothouse program-dfu`. Toggles are parked after every preset load:
+move a lever away from its position and back to make it write.
+
+1. **Toggle 1 (`delay_lines.select`)**, on preset 1: Down = 1 delay line (thin tail), Middle =
+   `default_delay_lines`, Up = `max_delay_lines`. Pass: the tail density changes audibly at
+   each step.
+2. **Toggle 2 (`early.envelope`)**: Down = Scatter (the early taps' levels wander), Middle =
+   neither, Up = Bloom (early taps swell). Pass: three distinct early envelopes.
+3. **Toggle 3 (`reverse.mode`)**: Down = reverse off, Middle = reverse into the reverb tail,
+   Up = reverse mixed direct. Pass: as described.
+4. **Both outputs.** Listen to output jack 1 and 2 in turn (or both into a stereo input),
+   active and bypassed, and during an upload's dry passthrough (`$H begin
+   /tmp/p.toml`). Pass: both always carry the same signal.
+5. **Scatter CPU.** Preset 9, "Through the Looking Glass", toggle 1 Up, toggle 2 Down, not
+   bypassed, audio playing, 30 s. Pass: Scatter is audible and there is no crackle.
+6. **FS 1 + FS 2 held 5 s** restores the preset (both LEDs blink 3 times); the pedal does not
+   enter DFU (the vendor's own firmwares use this gesture for DFU; this one uses SysEx `08` or
+   BOOT/RESET).
+7. `$H identity`. Pass: `member=01 00`.
+8. `$H upload presets.toml` (the Terrarium bank). Pass: COMMIT prints `ParseError … bank is for
+   board "terrarium", this pedal is "hothouse"`, nothing reboots, `$H info` is unchanged.
 
 ## Results log
 

@@ -19,6 +19,13 @@ describe("formatValue matches the engine scaling", () => {
     ["delay_lines.max", 0, "2LN"],
     ["delay_lines.max", 1, "5LN"],
     ["input.HiPassEnabled", 0.5, "ON"],
+    ["early.Scatter", 1, "ON"],
+    ["early.ScatterRate", 0, "0.10Hz"],
+    ["early.ScatterRate", 1, "5.00Hz"],
+    ["early.ScatterDepth", 0.25, "25%"],
+    ["delay_lines.select", 0, "1LN"],
+    ["delay_lines.select", 0.5, "2LN"],
+    ["delay_lines.select", 1, "5LN"],
   ])("%s = %f -> %s", (key, v, expected) => {
     expect(formatValue(key, v, lines)).toBe(expected);
   });

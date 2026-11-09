@@ -11,6 +11,7 @@ import {
   lineCount,
   pageBlocks,
   preferOn,
+  presentKeys,
 } from "../model/flow";
 import { formatValue } from "../model/scale";
 import { isOn, PAGES, PARAMS, type PageId } from "../model/schema";
@@ -178,6 +179,13 @@ function subText(id: BlockId, preset: Preset): string {
   }
 }
 
+/** The early-taps block names the envelope in use: Bloom, Scatter, or both. */
+function tapsLabel(preset: Preset): string {
+  const bloom = isOn(preset.params["early.Bloom"]!);
+  const scatter = isOn(preset.params["early.Scatter"]!);
+  return bloom && scatter ? "BLM+SCT" : bloom ? "BLOOM" : scatter ? "SCATTER" : BLOCKS.taps.short;
+}
+
 const blockBadges = (id: BlockId, preset: Preset) => [...new Set(BLOCKS[id].keys.flatMap((k) => badgesFor(preset, k)))];
 
 export function FlowPanel({ preset, page, focusKey, pinned, onBlock }: FlowPanelProps) {
@@ -225,7 +233,7 @@ export function FlowPanel({ preset, page, focusKey, pinned, onBlock }: FlowPanel
       .join(" ");
     const r = rectOf(id);
     const cx = r ? r.x + r.w / 2 : 0;
-    const short = id === "taps" && isOn(preset.params["early.Bloom"]!) ? "BLOOM" : info.short;
+    const short = id === "taps" ? tapsLabel(preset) : info.short;
 
     let shape: VNode;
     let texts: VNode;
@@ -332,6 +340,7 @@ export function FlowPanel({ preset, page, focusKey, pinned, onBlock }: FlowPanel
   }
 
   const info = BLOCKS[explained];
+  const rows = presentKeys(info.keys, preset);
   const explainedOn = blockOn(explained, preset);
   const stateChip = info.enable
     ? explainedOn
@@ -404,10 +413,10 @@ export function FlowPanel({ preset, page, focusKey, pinned, onBlock }: FlowPanel
             {explained === "lines" && (
               <p>{`This preset: ${lines} of ${TOTAL_LINE_COUNT} lines (default ${preset.defaultDelayLines}, max ${preset.maxDelayLines}), LateStageTap ${stageTap ? "on" : "off"}.`}</p>
             )}
-            {info.keys.length > 0 && (
+            {rows.length > 0 && (
               <table class="flow-params">
                 <tbody>
-                  {info.keys.map((k) => (
+                  {rows.map((k) => (
                     <tr key={k} class={k === focusKey ? "focus" : undefined}>
                       <td>{PARAMS[k]!.label}</td>
                       <td>{fv(k)}</td>

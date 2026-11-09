@@ -11,7 +11,7 @@ import {
   setField,
   TOTAL_LINE_COUNT,
 } from "./bank";
-import { KNOB_TARGETS, type PageId, TOGGLE_TARGETS } from "./schema";
+import { type Board, KNOB_TARGETS, type PageId, toggleCount, toggleTargets } from "./schema";
 
 export type Source = "project" | "file" | "pedal";
 
@@ -35,6 +35,8 @@ export interface EditorState {
   source: Source | null;
   fileName: string | null;
   error: string | null;
+  /** The board the bank is for: its `board` key, or the pedal's board when read from the pedal. */
+  board: Board;
 }
 
 export type ScalarField =
@@ -47,14 +49,15 @@ export type ScalarField =
 
 export type MapKind = "knob" | "toggle";
 
-/** Per map kind: the `Preset` property, the TOML table, its slot count, and its valid targets. */
-export const MAPS = {
-  knob: { prop: "knobMap", table: "knob_map", slots: 6, targets: KNOB_TARGETS },
-  toggle: { prop: "toggleMap", table: "toggle_map", slots: 4, targets: TOGGLE_TARGETS },
-} as const;
+/** Per map kind: the `Preset` property, the TOML table, its slot count, and its valid targets on `board`. */
+export const mapSpec = (kind: MapKind, board: Board) =>
+  kind === "knob"
+    ? ({ prop: "knobMap", table: "knob_map", slots: 6, targets: KNOB_TARGETS } as const)
+    : ({ prop: "toggleMap", table: "toggle_map", slots: toggleCount(board), targets: toggleTargets(board) } as const);
 
 export type Action =
-  | { type: "load"; text: string; source: Source; fileName: string | null }
+  /** `board`: the pedal's, when the text came from it; else the bank's own `board` key decides. */
+  | { type: "load"; text: string; source: Source; fileName: string | null; board?: Board }
   | { type: "select"; preset: number }
   | { type: "page"; page: PageId }
   | { type: "setParam"; key: string; value: number }
@@ -77,6 +80,7 @@ export const initialState: EditorState = {
   source: null,
   fileName: null,
   error: null,
+  board: "terrarium",
 };
 
 export const isDirty = (s: EditorState): boolean => s.doc !== null && docText(s.doc) !== s.savedText;
@@ -153,15 +157,15 @@ function edit(s: EditorState, field: string, literal: string, update: Partial<Pr
 }
 
 /** Reparses text the editor produced itself; failure would be an editor bug. */
-function reload(text: string) {
-  const r = loadBank(text);
+function reload(text: string, board: Board) {
+  const r = loadBank(text, board);
   if (!r.ok) throw new Error(`editor produced an invalid bank: ${r.error}`);
   return r;
 }
 
 export function reducer(s: EditorState, a: Action): EditorState {
   if (a.type === "load") {
-    const r = loadBank(a.text);
+    const r = loadBank(a.text, a.board);
     if (!r.ok) return { ...s, error: r.error };
     return {
       ...s,
@@ -174,6 +178,7 @@ export function reducer(s: EditorState, a: Action): EditorState {
       source: a.source,
       fileName: a.fileName,
       error: null,
+      board: r.board,
     };
   }
   if (a.type === "page") return { ...s, page: a.page };
@@ -190,7 +195,9 @@ export function reducer(s: EditorState, a: Action): EditorState {
 
     case "setParam": {
       if (!(a.key in preset.params)) return s;
-      const v = Number(formatNorm(clamp(a.value, 0, 1)));
+      // delay_lines.select stores exactly 0, 0.5 or 1 (One / Default / Max).
+      const value = a.key === "delay_lines.select" ? Math.round(a.value * 2) / 2 : a.value;
+      const v = Number(formatNorm(clamp(value, 0, 1)));
       return edit(s, `params.${a.key}`, formatNorm(v), { params: { ...preset.params, [a.key]: v } });
     }
 
@@ -221,11 +228,11 @@ export function reducer(s: EditorState, a: Action): EditorState {
       // Inserting an absent LED timing adds a line, so the parsed copy is rebuilt from the text.
       return next.doc!.lines.length === s.doc.lines.length
         ? next
-        : { ...next, presets: reload(docText(next.doc!)).presets };
+        : { ...next, presets: reload(docText(next.doc!), s.board).presets };
     }
 
     case "setTarget": {
-      const m = MAPS[a.kind];
+      const m = mapSpec(a.kind, s.board);
       if (!m.targets.includes(a.target) || a.slot < 0 || a.slot >= m.slots) return s;
       const map: [string[], string[]] = [[...preset[m.prop][0]], [...preset[m.prop][1]]];
       map[a.bank][a.slot] = a.target;
@@ -240,12 +247,12 @@ export function reducer(s: EditorState, a: Action): EditorState {
       doc = setField(doc, index, "name", `"${preset.name.slice(0, MAX_NAME_BYTES - 5)} copy"`);
       doc = setField(doc, index, "blinks", String(Math.min(index + 1, 20)));
       const origins = [...s.origins, { index: s.origins[s.selected]!.index, added: true }];
-      return { ...s, doc, presets: reload(docText(doc)).presets, origins, selected: index };
+      return { ...s, doc, presets: reload(docText(doc), s.board).presets, origins, selected: index };
     }
 
     case "delete": {
       if (s.presets.length <= 1) return s;
-      const { doc, presets } = reload(docText(deletePreset(s.doc, s.selected)));
+      const { doc, presets } = reload(docText(deletePreset(s.doc, s.selected)), s.board);
       const origins = s.origins.filter((_, i) => i !== s.selected);
       return { ...s, doc, presets, origins, selected: Math.min(s.selected, presets.length - 1) };
     }

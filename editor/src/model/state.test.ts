@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import fixture from "../../../tests/fixtures/two_presets.toml" with { type: "text" };
+import hhFixture from "../../../tests/fixtures/two_presets_hothouse.toml" with { type: "text" };
 import { docText } from "./bank";
 import { type Action, type EditorState, initialState, isDirty, presetChanges, problems, reducer } from "./state";
 
@@ -82,6 +83,34 @@ describe("reducer", () => {
     expect(ok.presets[0]!.knobMap[1][5]).toBe("late.LineDecay");
     expect(line(ok, "knob6_b")).toBe('knob6_b = "late.LineDecay"');
     expect(run(loaded, { type: "setTarget", kind: "toggle", bank: 0, slot: 0, target: "late.LineDecay" })).toBe(loaded);
+  });
+
+  describe("boards", () => {
+    const hh = run(initialState, { type: "load", text: hhFixture, source: "file", fileName: "hh.toml" });
+
+    it("takes the board from the bank, or from the pedal it was read from", () => {
+      expect(loaded.board).toBe("terrarium");
+      expect(hh.board).toBe("hothouse");
+      const wrong = run(loaded, { type: "load", text: hhFixture, source: "pedal", fileName: null, board: "terrarium" });
+      expect(wrong.error).toBe('bank is for board "hothouse", this pedal is "terrarium"');
+      expect(wrong.doc).toBe(loaded.doc);
+    });
+
+    it("offers three-way toggle targets and only three toggles on a HotHouse", () => {
+      const envelope = { type: "setTarget", kind: "toggle", bank: 0, slot: 0, target: "early.envelope" } as const;
+      expect(run(loaded, envelope)).toBe(loaded);
+      expect(run(hh, envelope).presets[0]!.toggleMap[0][0]).toBe("early.envelope");
+      expect(run(hh, { ...envelope, slot: 3 })).toBe(hh);
+      const scatter = run(loaded, { ...envelope, slot: 3, target: "early.Scatter" });
+      expect(line(scatter, "toggle4_a")).toBe('toggle4_a = "early.Scatter"');
+    });
+
+    it("stores delay_lines.select as exactly 0, 0.5 or 1", () => {
+      const s = run(hh, { type: "setParam", key: "delay_lines.select", value: 0.8 });
+      expect(line(s, "select")).toBe("select = 1.0");
+      expect(s.presets[0]!.params["delay_lines.select"]).toBe(1);
+      expect(run(hh, { type: "setParam", key: "delay_lines.max", value: 1 })).toBe(hh);
+    });
   });
 
   describe("presetChanges", () => {

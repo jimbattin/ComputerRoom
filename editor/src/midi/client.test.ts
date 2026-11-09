@@ -18,6 +18,9 @@ class FakePedal implements MidiTransport {
   rebootTimesOut = false;
   reboots = 0;
   dataFrames: { seq: number; bytes: number }[] = [];
+  /** Identity Reply member code; null: firmware that does not answer the Identity Request. */
+  member: number | null = 0;
+  buildId = "abc1234";
   private subscribers = new Set<(msg: Uint8Array) => void>();
   private session: { length: number; hash: number; received: number[]; nextSeq: number } | null = null;
 
@@ -42,6 +45,30 @@ class FakePedal implements MidiTransport {
   send(msg: Uint8Array) {
     expect(msg[0]).toBe(0xf0);
     expect(msg[msg.length - 1]).toBe(0xf7);
+    if (msg[1] === 0x7e) {
+      expect([...msg]).toEqual([0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7]);
+      if (this.member === null) return;
+      const reply = Uint8Array.from([
+        0xf0,
+        0x7e,
+        0x7f,
+        0x06,
+        0x02,
+        ...HEADER,
+        this.member,
+        0,
+        0,
+        0,
+        0,
+        0,
+        ...enc(this.buildId),
+        0xf7,
+      ]);
+      queueMicrotask(() => {
+        for (const cb of this.subscribers) cb(reply);
+      });
+      return;
+    }
     expect([...msg.slice(1, 4)]).toEqual([...HEADER]);
     const cmd = msg[4]!;
     const body = msg.slice(5, -1);
@@ -172,6 +199,25 @@ describe("PresetLink", () => {
     expect(await link.upload(fixture)).toBeNull();
     expect(decode(pedal.text)).toBe(fixture);
     expect(await link.revert()).toBeNull();
+  });
+
+  it.each([
+    [0, "terrarium"],
+    [1, "hothouse"],
+    [5, "terrarium"],
+  ] as const)("reads Identity Reply member %i as %s", async (member, board) => {
+    const pedal = new FakePedal(builtIn);
+    pedal.member = member;
+    expect(await new PresetLink(pedal).identify()).toEqual({ board, buildId: "abc1234" });
+  });
+
+  it("treats a pedal without an Identity Reply as a Terrarium", async () => {
+    const pedal = new FakePedal(builtIn);
+    pedal.member = null;
+    expect(await new PresetLink(pedal, { replyTimeoutMs: 20 }).identify()).toEqual({
+      board: "terrarium",
+      buildId: "unknown",
+    });
   });
 
   it("resolves null when the rebooted pedal does not answer INFO", async () => {
