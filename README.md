@@ -72,8 +72,8 @@ submodule is no longer used by the build (the pin maps for both pedals live in
 `src/board.h`), but stays checked out. The build fails without the others, so clone
 recursively:
 ```
-git clone --recurse-submodules https://github.com/jimbattin/DaisyCloudSeed.git
-cd DaisyCloudSeed
+git clone --recurse-submodules https://github.com/jimbattin/ComputerRoom.git
+cd ComputerRoom
 ```
 In a clone made without `--recurse-submodules`, or after pulling a change that moves a
 submodule, run:

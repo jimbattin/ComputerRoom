@@ -1,4 +1,4 @@
-# DaisyCloudSeed Project Documentation
+# Computer Room (ComputerRoom) Project Documentation
 
 ## Project Overview
 
@@ -13,7 +13,7 @@ guitar pedal enclosures selected at compile time (`src/board.h`, Makefile `BOARD
 ## Directory Structure
 
 ```
-DaisyCloudSeed/
+ComputerRoom/
 ├── CloudSeed/             # Core reverb algorithm library (builds libcloudseed.a)
 │   ├── AudioLib/          # Audio utilities (Biquad, filters, ShaRandom)
 │   ├── Utils/             # SHA256 utilities
@@ -847,7 +847,7 @@ embedded bank (presets.toml or presets_hothouse.toml).
 `src/board.h`.
 
 ```bash
-git clone --recurse-submodules https://github.com/jimbattin/DaisyCloudSeed.git
+git clone --recurse-submodules https://github.com/jimbattin/ComputerRoom.git
 # or, in an existing clone / after a pull that moves a submodule:
 git submodule update --init --recursive
 ```
