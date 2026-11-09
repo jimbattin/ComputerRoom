@@ -24,6 +24,11 @@ build flags, and before any release. Record the results in the log at the end.
   ```bash
   H="python3 tools/usb_preset_host.py"
   ```
+  Besides the SysEx commands (`info`, `read`, `upload`, `revert`, `dfu`, `load`, ...) it sends
+  and prints MIDI live control (docs/MIDI.md): `$H cc NUMBER VALUE` (CC on channel 1), `$H nrpn
+  NUMBER VALUE14`, `$H pc PROGRAM` (0-based), `$H dump` (the DUMP report, then `DUMP: Ok`) and
+  `$H monitor SECONDS`; reports print as `PC p`, `CC n = v` and `NRPN n = q`. Only one program
+  may hold the port: close every editor tab first.
 
 Every flash of a different firmware image wipes the presets saved on the pedal (FS 1 held
 5 s), and this checklist flashes several. Write down any saved sounds worth keeping first.
@@ -271,16 +276,62 @@ move a lever away from its position and back to make it write.
 HotHouse build, audio playing, not bypassed.
 
 1. Preset 1 (Chorus), default toggles: `$H load` a few times, a second apart. Pass: `LOAD: avg
-   ... max ... overruns 0`, with avg roughly 70-80 % (measured 2026-11-08: about 77 %, max
-   about 88 %) and max above avg but at most 100 %.
+   ... max ... overruns 0`, with avg roughly 15-25 % (measured 2026-11-09: about 20 %, max
+   about 27 %) and max above avg but at most 100 %.
 2. Open the editor and connect. Pass: the CPU meter at the right of the header's small LED
    shows the same average and peak as `$H load` (within a few per cent; both read the same
    one-second window) and no `XRUN`.
 3. Preset 9, "Through the Looking Glass", toggle 1 Up (`max_delay_lines`), 30 s. Pass: `$H load`
    reports `overruns 0` every time and the editor's meter never shows `XRUN`.
 4. Editor connected on the pedal's bank: tap FS2 a few times, a few seconds apart. Pass: the
-   editor's main display follows each change to the next preset within about a second, and
-   `$H load` prints the same `currentPreset` (0-based) as the editor shows (1-based).
+   editor's main display follows each change to the next preset within about 50 ms (the
+   pedal's Program Change report, H17), and `$H load` (editor tab closed) prints the same
+   `currentPreset` (0-based) as the editor showed (1-based).
+
+### H17. MIDI live control
+
+Close every editor tab, then on preset 1 (Chorus), not bypassed, audio playing:
+
+1. `$H monitor 10` while turning KNOB_1. Pass: `CC 70 = …` and `NRPN 70 = …` lines appear,
+   at most about 100 per second.
+2. `$H cc 70 0`. Pass: the dry signal goes silent. Then turn KNOB_1 slowly by a hair. Pass:
+   the dry level glides up from silence, with no jump (the knob was re-parked).
+3. `$H nrpn 40 16383`. Pass: LineDecay at maximum (a very long tail).
+4. In a second shell run `$H monitor 10`, then `$H pc 2`. Pass: LED2 blinks 3 times, and the
+   monitor shows `PC 2` followed by 54 `CC` + 54 `NRPN` lines.
+5. `$H cc 102 0`: LED1 off (bypassed); `$H cc 102 127`: LED1 on. Set it bypassed again,
+   wait 3 s, power-cycle. Pass: the pedal boots bypassed.
+6. `$H dump`. Pass: `PC …`, 108 control lines, then `DUMP: Ok`.
+7. Editor (`make editor`, Chrome):
+   - after page load the device LED shows `SYNC  LIVE`;
+   - dragging DRY is heard at once;
+   - turning KNOB_1 moves the DRY fader within about 50 ms;
+   - FS2 tap: the editor follows the preset and its faders show the pedal's values;
+   - edit a fader of P03, select P04, then P03 again: the pedal plays the edited P03;
+   - FS1 + FS2 held 5 s on P03: the editor's P03 values return to the bank values;
+   - BYPASS toggles LED1, and FS1 toggles the BYPASS key.
+8. Close the editor. `$H load` a few times while another shell runs `$H nrpn 70 …` in a loop
+   and a knob is turned. Pass: `overruns 0`.
+9. Disconnect USB and power the pedal from 9 V only for 1 minute. Pass: it boots and runs
+   normally (no hang: the link sends nothing while USB is not configured).
+
+### H18. Engine audit
+
+The CloudSeed engine audit (docs/PERFORMANCE.md §12) changed only CPU and memory use plus
+rounding-level output; this checks it on the pedal.
+
+1. Repeat H16 step 1 on the HotHouse with Chorus. Record avg / max next to the pre-audit
+   23.7 % / 31.4 % (2026-11-09, same tree with the old engine). Pass: `overruns 0`, avg and
+   max no higher than before.
+2. Map `late_diffusion.LateDiffusionEnabled` to a toggle (in the editor, or a test bank with
+   e.g. `toggle2_a = "late_diffusion.LateDiffusionEnabled"`), and flip it repeatedly with
+   audio playing while another shell runs `$H load`. Pass: no dropout or click beyond the
+   diffuser's own on/off change, and `overruns 0` (the flip no longer zeroes ~1 MB of SDRAM
+   inside the callback).
+3. Cycle all ten presets with FS2. Pass: each sounds as before the audit.
+4. HotHouse only: repeat H11 (1 kHz whine A/B) against the pre-audit HotHouse build. The
+   HotHouse no longer runs `keepCoreBusy()`. Record whether the whine is louder; a louder
+   whine is reported, not a failure (dropping the busy work on HotHouse is intended).
 
 ## Results log
 
@@ -289,3 +340,4 @@ Copy one row per validated revision.
 | Date | Commit | Tester | S1-S4 | H1-H9 | H10 | H11 | Notes |
 |---|---|---|---|---|---|---|---|
 | 2026-09-26 | 89dc63a | jbattin | pass | pass | pass | pass | Baseline c5609ec (last pre-USB). S3 SAME-CALLS, 1780 -> 1766 lines. S4: DTCM +15,136 B (USB stack), SRAM +11,108 B, RAM_D2_DMA +988 B (MIDI rx/tx), SDRAM +627,424 B (toml_arena 512 KiB + gUploadText 96 KiB + gUploadCheck). H10 flood: 4,250 INFO, 85 READ-all, no errors. |
+| 2026-11-09 | 715a6a1+dirty | Claude (scripted, HotHouse) | S1, S2 pass | H2, H3, H13 pass | - | not run | H16.1: Chorus 20.1 % avg / 26.7 % max, 0 overruns. H17 (scripted parts): dump 54 CC + 54 NRPN, PC 2 reported with full state, NRPN 40 / CC 70 / Engage applied and reported. H18.1: pre-audit 23.7 / 31.4 % -> 20.1 / 26.7 %. H18.2 (via NRPN 45): pre-audit max 558-590 %, 1-9 overruns per window -> max 39-44 %, 0 overruns. H18.3 (listening) and H18.4 (whine) not run. |

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import fixture from "../../../tests/fixtures/two_presets.toml" with { type: "text" };
 import hhFixture from "../../../tests/fixtures/two_presets_hothouse.toml" with { type: "text" };
-import { docText } from "./bank";
+import { fromQ, qFor } from "../midi/control";
+import { docText, loadBank } from "./bank";
 import { type Action, type EditorState, initialState, isDirty, presetChanges, problems, reducer } from "./state";
 
 const run = (s: EditorState, ...actions: Action[]) => actions.reduce(reducer, s);
@@ -142,6 +143,45 @@ describe("reducer", () => {
       expect(c.original.name).toBe("Through the Looking Glass");
       expect(Object.keys(c.fields).sort()).toEqual(["blinks", "name"]);
       expect(presetChanges(run(s, { type: "saved", text: docText(s.doc!), fileName: null }), 2).added).toBe(false);
+    });
+  });
+
+  describe("live", () => {
+    const live = run(loaded, { type: "pedalBank", hash: 1234 });
+
+    it("ignores liveParam while the doc is not the pedal's bank", () => {
+      expect(run(loaded, { type: "liveParam", preset: 1, key: "late.LineDecay", q: 5 })).toBe(loaded);
+    });
+
+    it("leaves the text alone for an equivalent q", () => {
+      const v = loaded.presets[1]!.params["late.LineDecay"]!;
+      const s = run(live, { type: "liveParam", preset: 1, key: "late.LineDecay", q: qFor("late.LineDecay", v) });
+      expect(docText(s.doc!)).toBe(docText(live.doc!));
+    });
+
+    it("patches the reported preset with the exact float32", () => {
+      const s = run(live, { type: "liveParam", preset: 1, key: "late.LineDecay", q: 12345 });
+      expect(s.selected).toBe(0);
+      const r = loadBank(docText(s.doc!));
+      if (!r.ok) throw new Error(r.error);
+      expect(Math.fround(r.presets[1]!.params["late.LineDecay"]!)).toBe(fromQ(12345));
+      expect(s.presets[1]!.params["late.LineDecay"]).toBe(r.presets[1]!.params["late.LineDecay"]!);
+    });
+
+    it("writes 1.0 for a switch at q 8192", () => {
+      const s = run(live, { type: "liveParam", preset: 0, key: "early.Bloom", q: 8192 });
+      expect(line(s, "Bloom")).toMatch(/= 1\.0$/);
+    });
+
+    it("forgets the pedal bank on duplicate and does not re-bump the epoch for the same hash", () => {
+      expect(run(live, { type: "duplicate" }).pedalHash).toBeNull();
+      expect(live.pedalEpoch).toBe(1);
+      expect(run(live, { type: "pedalBank", hash: 1234 })).toBe(live);
+    });
+
+    it("follows the pedal's preset only on the pedal's bank", () => {
+      expect(run(loaded, { type: "pedalPreset", preset: 1 }).selected).toBe(0);
+      expect(run(live, { type: "pedalPreset", preset: 1 }).selected).toBe(1);
     });
   });
 });

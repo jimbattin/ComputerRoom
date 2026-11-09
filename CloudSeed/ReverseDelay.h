@@ -1,7 +1,7 @@
 #ifndef REVERSEDELAY
 #define REVERSEDELAY
 
-#include <cmath>
+#include "FastSin.h"
 
 namespace CloudSeed
 {
@@ -28,19 +28,21 @@ namespace CloudSeed
         int size = 0;       // buffer length in samples
         int W = 2;          // grain window length in samples (reverse time)
         int Xf = 1;         // crossfade length in samples (Xf < W/2)
+        float fadeScale = 0.25f; // 0.25 / Xf: FastSin index of a fade position (quarter wave)
         int hop = 1;        // samples between grain launches (W - Xf)
         int writeIndex = 0;
         int hopCounter = 0; // counts down to the next grain launch
         Grain grains[MaxGrains];
 
         // Equal-power window: fades 0->1 over the first Xf samples, holds at 1,
-        // then fades 1->0 over the final Xf samples of the grain.
+        // then fades 1->0 over the final Xf samples of the grain. sin(pi/2 * x / Xf)
+        // from the FastSin table (FastSin::Init() runs before the first Process()).
         float Window(int phase) const
         {
             if (phase < Xf)
-                return std::sin(1.5707963267948966f * (float)phase / (float)Xf);
+                return FastSin::Get((float)phase * fadeScale);
             if (phase >= W - Xf)
-                return std::sin(1.5707963267948966f * (float)(W - phase) / (float)Xf);
+                return FastSin::Get((float)(W - phase) * fadeScale);
             return 1.0f;
         }
 
@@ -75,6 +77,7 @@ namespace CloudSeed
             Xf = W / 8;
             if (Xf < 1) Xf = 1;
             if (Xf > W / 2) Xf = W / 2;
+            fadeScale = 0.25f / (float)Xf;
             hop = W - Xf;
             if (hop < 1) hop = 1;
 

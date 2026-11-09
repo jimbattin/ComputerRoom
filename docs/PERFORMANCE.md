@@ -14,9 +14,10 @@ feedback multiply (`CloudSeed/DelayLine.h:199`), `ModulatedAllpass::Process*`'s 
 (`CloudSeed/ModulatedAllpass.h:90,128`), and `Biquad::Process`'s IIR state
 (`CloudSeed/AudioLib/Biquad.h:57-61`). Once a value enters the subnormal range (~1e-38),
 the Cortex-M7 FPU takes a multi-cycle microcoded slow path per operation instead of
-single-cycle. The codebase already had three independent, incomplete, ad-hoc manual
-guards for this (`ReverbChannel.h:373-380`, `AudioLib/Hp1.h:63-66`, `AudioLib/Lp1.h:59-62`)
-that don't cover the delay-line/allpass feedback state where the problem originates.
+single-cycle. The codebase already had three ad-hoc guards (`ReverbChannel.h:373-380`,
+`AudioLib/Hp1.h:63-66`, `AudioLib/Lp1.h:59-62`). They were not denormal guards: the first was
+a -90 dBFS gate on the input, the other two a zero-snap of the one-pole filters' state, and
+none covered the delay-line/allpass feedback state where the problem originates.
 
 **Fix**: set the FPU's Flush-to-Zero bit (FPSCR bit 24) once at boot, in `main()` before
 `hw.Init()`:
@@ -26,7 +27,7 @@ __set_FPSCR(__get_FPSCR() | (1u << 24)); // FZ: flush denormals to zero in hardw
 ```
 
 Added `#include "cmsis_gcc.h"` for the `__set_FPSCR`/`__get_FPSCR` CMSIS intrinsics. The
-three existing manual guards were left in place (harmless, now redundant).
+three guards were left in place at the time and removed in §12.
 
 ## 2. Replace `std::map<Parameter,float>` with a flat array
 
@@ -224,7 +225,7 @@ sound is unchanged; the same `0xBE` check now yields `SampleDelay` 85 and 47, `M
 ## 11. USB-MIDI preset link: no idle cost
 
 **Files**: `src/usb_midi_link.cpp`, `src/preset_protocol.cpp`, `src/cloudseed.cpp`
-(`serviceUsbPresetLink()`, the callback's passthrough gate)
+(`serviceUsbMidi()`, the callback's passthrough gate)
 
 The preset upload link (docs/USB_MIDI.md) keeps USB-MIDI running at every boot, next to the
 audio callback. The USB OTG FS interrupt shares priority 0 with the audio DMA interrupts
@@ -234,9 +235,12 @@ delays the callback directly.
 **Fix**: the design keeps the audio path's cost at one flag test:
 - The stack raises no interrupts while the link is idle or unplugged: SOF interrupts are off
   and VBUS sensing is on (`libdaisy/src/usbd/usbd_conf.c:420,424`).
-- The receive callback (USB ISR) only appends bytes to `SysExAssembler` (no calls, no
-  allocation). Decoding, replies, validation (a full TOML parse) and QSPI writes run in the
-  main loop.
+- The receive callback (USB ISR) only feeds bytes to `MidiInQueue::Feed` (byte framing into an
+  SPSC ring, no allocation). Decoding, replies, MIDI live-control reports, validation (a full
+  TOML parse) and QSPI writes run in the main loop; sends are queued and handed to the USB
+  stack without busy-waiting.
+- MIDI live-control writes (docs/MIDI.md) reach the callback through `ControlMailbox`: the
+  callback drains at most 8 pending writes per block, each a bounded `SetParameter`.
 - During an upload session the callback passes audio through
   (`state.presetChangeInProgress || state.uploadActive`), so COMMIT's parse and flash write
   never compete with the reverb.
@@ -254,6 +258,205 @@ normalised). Memory cost, from the linker report:
 
 `.sdram_bss` is never zeroed, so the SDRAM buffers add no boot time. The USB init adds about
 10 ms (`libdaisy/src/hid/usb_midi.cpp:125`).
+
+## 12. Engine audit (2026-11)
+
+**Files**: everything under `CloudSeed/`, `src/board.h`, `src/cloudseed.cpp` (main loop),
+`Makefile`, `CloudSeed/Makefile`; new test `tests/allpass_clear_test.cpp`
+
+An audit of the engine for M7 practice. It drew on the M7 findings in dp4's
+`daisy/README.md` "Performance (real time)" items 6-7. The firmware disassembly showed
+per-sample double-precision math in `ReverbChannel::Process` and `AllpassDiffuser::Process`, member
+reloads and stores in every hot loop, an SDRAM sweep inside the audio callback, and buffers
+sized far beyond what is read. No hardware was available for A/B load measurements, so every
+object stays in its memory region; placement moves are listed as candidates below.
+
+Method: a throwaway host harness rendered the engine through `ReverbController` on memory
+filled with `0x5A`, so any read of an unwritten slot changes the output. The scenarios were:
+- all ten presets: noise, an impulse, then the tail;
+- a sweep of every parameter;
+- all parameters at 0 and at 1;
+- `ReverseDelay` at three window lengths.
+
+Steps 1-4 below rendered byte-identical to the pre-audit tree. Steps 5-6 were allowed
+inaudible changes and were compared against the previous step.
+
+Two of the planned scenarios turned out to test little. The all-0 run is silent, because
+every output level is 0. In the all-1 run, the 1 s pre-delay keeps the reverb out of the
+rendered second, so only the dry signal is heard. Two audible variants were added afterwards:
+all-0 with the four output levels at 1, and all-1 with no pre-delay. They were compared
+pre-audit -> final only. Both are finite, with |RMS delta| < 0.0001 dB and |peak delta| <=
+0.0003 dB; the residuals are -117.8 dB and -58.2 dB.
+
+1. **Dead code and header hygiene** (byte-identical):
+   - Removed `Default.h`, `Utils::BitcrushAndReduce` / `Gain2DB`, the unused `MathDefs`
+     macros, and the four never-read `ValueTables` (`Response2Oct`, `5Oct`, `6Oct`, `4Dec`).
+     The remaining tables are 4001 entries, the index range `Get()` reads, instead of 40001.
+   - Removed the whole `SetSamplerate` / `GetSamplerate` chain and `GetParameterCount`.
+   - `Biquad` is reduced to the two shelves `DelayLine` uses.
+   - Removed `ModulatedAllpass::Get`, `ReverbChannel::GetLineOutput` + `lineOutBuffer`
+     (written every block, never read), the `ChannelLR` / `crossSeed` stereo remnants (always
+     Left / 0), the self-includes, and `using namespace` in headers.
+   - The `CrossSeed` case keeps its `UpdateLines()` call (`CloudSeed/ReverbChannel.h:261-269`).
+     The audit plan assumed it recomputed unchanged values, but it does not: the line
+     diffusers' mod amount and rate are scaled by their seeds, which `PostDiffusionSeed`
+     changes without re-applying them. `LoadPreset()` writes `CrossSeed` after
+     `PostDiffusionSeed`, so this call is what applies them; removing it changed eight of the
+     ten presets.
+2. **Buffer wiring** (byte-identical):
+   - `ModulatedAllpass` takes its ring length from `AllpassDiffuser` (`CloudSeed/AllpassDiffuser.h:28-35`):
+     `2 * (MaxDelayMs * samplerate / 1000) + 2` = 9602 samples. Before, the ring was 19200 and
+     the 150 ms size, 7200, was passed as the *output block* length, where 48 are used.
+   - `MultitapDiffuser::output` is one block (48), not 48000.
+   - `AllpassDiffuser::filters` and `ReverbChannel::lines` are fixed arrays, so no
+     `std::vector` code is linked.
+   - `Feedback`, `ModulationEnabled`, `DelayLine::feedback` and the four output levels are
+     defined before the preset load.
+3. **Lazy allpass clear** (byte-identical):
+   - `SetParameter(DiffusionEnabled / LateDiffusionEnabled)` runs in the audio callback when a
+     knob, toggle or MIDI write flips it, and called `ModulatedAllpass::ClearBuffers()`, which
+     zeroed the whole ring. For a late-diffusion flip that was about 1 MB of SDRAM writes.
+   - `ClearBuffers()` now sets a `written` count to 0. Until the ring has been rewritten (~200 ms),
+     `Process()` runs an out-of-line `ProcessFresh()` that reads every slot not yet written as
+     0 (`CloudSeed/ModulatedAllpass.h:74-141`).
+   - `tests/allpass_clear_test.cpp` checks this against an allpass with a truly zeroed ring.
+     With modulation off, on with interpolation, and on without, it matches sample for
+     sample. The test fails if stale samples are replayed.
+4. **Hot loops** (byte-identical):
+   - `ModulatedDelay::Process` and `ModulatedAllpass::ProcessWithMod` run in segments between
+     `Update()` calls, with indices, gains and feedback in locals. `ProcessNoMod`, `Biquad` and
+     `MultitapDiffuser::Process` use locals too: the float stores can alias the members, so the
+     compiler reloaded them every sample. The multitap tap loop now has no store
+     (`vfma` into a register, one store per sample).
+   - `MultitapDiffuser`'s `*Temp` double buffer and `isDirty` are gone: every `SetParameter`
+     runs in the callback or behind its passthrough gate, never during `Process()`.
+   - The `tempBuffer` copies are gone from `DelayLine`, `ReverbChannel` and
+     `ReverbController`; the stages read each other's outputs directly.
+5. **Inaudible removals**:
+   - The -90 dBFS input gate (`n * n < 1e-9`) and the `Lp1` / `Hp1` zero-snap are removed;
+     flush-to-zero (§1) covers denormals.
+   - `Hp1` is now `Lp1` plus a subtraction (`CloudSeed/AudioLib/Hp1.h`). Its state is cleared
+     by `ReverbChannel::ClearBuffers()`, which before cleared the wrong field
+     (`highPass.Output`).
+   - With both input filters off, nothing is copied.
+   - Against step 4: every scenario finite, |RMS delta| <= 0.0001 dB, |peak delta| <= 0.0001
+     dB, residual -85.8 dB or lower.
+6. **Float-only continuous math**:
+   - Gains, coefficients, modulation depth and rate, and the LFO lookup are float:
+     `GetScaledParameter`, `UpdateLines`, `AllpassDiffuser::SetMod*`, `Lp1::Update` (rewritten
+     with `1 - cos w = 2 sin^2(w/2)` so float keeps precision at 20 Hz), `Biquad::Update`, and
+     `Utils::DB2gain`.
+   - The per-line gain is folded into the mix (`Utils::Gain` removed).
+   - Integer sample counts, seeds and stage counts keep upstream's double arithmetic, written
+     as explicit `(double)` casts, so they come out unchanged.
+   - `FastSin::Get` masks its index (power-of-two table), and `FastSin::Step` /
+     `RandomPhase` replace the phase-advance + `fmod` duplicated in `ModulatedDelay` and
+     `ModulatedAllpass`.
+   - `ReverseDelay::Window` reads the quarter wave from the `FastSin` table instead of a
+     per-sample `std::sin` and division.
+   - `-Wdouble-promotion` is on in `CloudSeed/Makefile` (`-Werror`), and as an error in the
+     `engine_alloc_test` build, which compiles every engine header.
+   - Against step 5: every scenario finite, |RMS delta| <= 0.0002 dB, |peak delta| <= 0.0005
+     dB. The residual is -45.7 dB at worst (preset 1, Chorus): its modulated delays drift in
+     phase, while the level and spectrum stay the same.
+
+HotHouse: `keepCoreBusy()` now runs on the Terrarium only (`kKeepCoreBusy`, `src/board.h`).
+The HotHouse image contains no `gBusyPhase` / `gBusySink`. Both boards keep running the reverb
+while bypassed.
+
+**Results**:
+
+Linker report, before -> after:
+
+|Region|Terrarium before|Terrarium after|HotHouse before|HotHouse after|
+|---|---|---|---|---|
+|SRAM|234,232 B|230,008 B|234,376 B|230,056 B|
+|DTCMRAM|53,884 B|53,884 B|53,956 B|53,948 B|
+|SDRAM|53,138,368 B|51,922,352 B|53,138,368 B|51,922,352 B|
+
+The SDRAM line drops by the 1,216,016 B of unused `ValueTables`. `custom_pool` is a fixed
+48 MB reservation, so the pool saving does not show in that report. Measured on the host
+(x86-64; 32-bit ARM is slightly smaller): the engine's pool use went from 3,767,096 B to
+2,770,544 B, and its heap use, including the D2-heap line buffers, from 9,136 B to 7,088 B.
+
+Double-precision and libm instructions per function (`arm-none-eabi-objdump` of
+`build/terrarium/cloudseed.elf`, counting `.f64`, `__aeabi_d*` and calls to `pow` / `sin` /
+`cos` / `fmod` / `sqrt` ...):
+
+|Function|Before|After|
+|---|---|---|
+|`ReverbChannel::Process`|23|0|
+|`AllpassDiffuser::Process`|12|0|
+|`MultitapDiffuser::ProcessScatter`|3|0|
+|`ReverbChannel::SetParameter`|1018|492|
+|`ReverbController::GetScaledParameter`|17|11|
+|`MultitapDiffuser::Update`|30|9|
+|`Biquad` ctor / `Update` / `SetGainDb` / `SetSamplerate`|19|0|
+|`ReverbChannel` constructor (boot)|191|39|
+|`ValueTables::Init` (boot)|46|25|
+
+The 492 left in `SetParameter` are the explicit integer sites: `Ms2Samples`, the line delay
+and its clamp in `UpdateLines`, and `AllpassDiffuser::Update`'s `pow(10, seed)`. These are
+inlined into each case that calls them. No audio-rate function has any.
+
+**Measured on the pedal** (HotHouse, 400 MHz, 2026-11-09). A is the same working tree with the
+pre-audit engine (`CloudSeed/` from HEAD, `keepCoreBusy()` on); B is the audited tree. Both
+were flashed over DFU and driven over USB-MIDI by `tools/usb_preset_host.py`. Each value is
+one `LOAD` window (1 s), taken after the preset or setting had applied:
+
+|Preset (default lines)|A avg / max|B avg / max|
+|---|---|---|
+|1 Chorus|23.7 / 31.4 %|20.1 / 26.7 %|
+|2 Dull Echos|19.9 / 26.2 %|16.3 / 22.1 %|
+|3 Hyperplane|32.0 / 39.5 %|26.9 / 33.7 %|
+|4 Medium Space|36.9 / 46.9 %|29.3 / 37.9 %|
+|5 Noise in the Hallway|43.8 / 57.2 %|37.0 / 43.9 %|
+|6 Rubi Ka Fields|35.9 / 44.5 %|30.3 / 37.3 %|
+|7 Small Room|27.4 / 35.9 %|23.7 / 31.2 %|
+|8 90s Are Back|11.0 / 17.6 %|9.1 / 17.8 %|
+|9 Through the Looking Glass|56.4 / 66.8 %|45.7 / 53.8 %|
+|10 Dark Plate|20.4 / 26.9 %|17.1 / 24.0 %|
+|9 at max (4 lines)|61.2 / 89.8 %|58.8 / 70.6 %|
+
+Over the ten presets the average load is 5.2 points lower (17 % relative), and the peaks are
+lower too. Enable flips sent over MIDI (NRPN 45 / 26, the same `SetParameter` path as a
+toggle), ten per second, Chorus at 5 lines:
+
+|Flip|A max / overruns per window|B max / overruns|
+|---|---|---|
+|`LateDiffusionEnabled`|558-590 % / 1-9|39-44 % / 0|
+|`DiffusionEnabled`|132-152 % / 1-8|42-43 % / 0|
+
+Before the audit a late-diffusion flip stalled the callback for about 5.6 ms (five or six lost
+blocks); after it, a flip costs nothing measurable. Per-stage cost on B (Chorus, steady
+windows): one more line about 4.6 points (15.8 % at 1 line, 34.3 % at 5); 1-stage late
+diffusion about 2.3 points per line; each early tap about 0.6-0.75 points (the tap reads
+stream from SDRAM); 1 line, 1 tap and no early diffusion 6.0 %.
+
+**Identified, not changed**:
+- A knob mapped to a seed re-hashes its series (SHA-256) on every write: `TapSeed` costs 50
+  compressions per block while the knob moves.
+- Upstream's integer division `count / MaxTaps` in the multitap gain
+  (`CloudSeed/MultitapDiffuser.cpp:156-158`): fixing it would change every preset's early level.
+- `InputMix` is stored but does nothing; removing it touches the parser, the MIDI table and
+  the editor.
+- Placement candidates that need a LOAD A/B on hardware:
+  - engine control state and the 48-float scratch buffers from the SDRAM pool / D2 heap into
+    DTCM;
+  - ITCM for `audioCallback`, `ReverbChannel::Process`, `AllpassDiffuser::Process` and
+    `MultitapDiffuser::Process*` (~12.5 KB), via an app `LDSCRIPT`
+    (`libdaisy/core/Makefile:231` honours an override);
+  - the SDRAM MPU region 1 attribute: it is TEX0 C1 B1, write-back no-write-allocate
+    (`libdaisy/src/sys/system.cpp`);
+  - libdaisy's `-fno-move-loop-invariants`.
+- Rings still larger than needed: the `DelayLine` 2 s ring (1.5 s + modulation needed) and the
+  multitap 1 s ring (0.5 s needed).
+- The 48 MB `custom_pool` reservation against ~3 MB used.
+- No stack guard, no null-page MPU region, and an unbounded `_sbrk`.
+
+Verification: `make test` (now with `allpass_clear_test`), `make` and `make BOARD=hothouse`
+link with no warnings from `src/` or `CloudSeed/`, and `make presets-check` passes. On the
+pedal: the tables above, and docs/HARDWARE_TESTS.md H18.
 
 ## Verification performed
 

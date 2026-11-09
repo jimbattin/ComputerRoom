@@ -4,7 +4,8 @@
 #include <string.h>
 
 // C++14: odr-used static constexpr members need a namespace-scope definition.
-constexpr size_t   SysExAssembler::kMaxFrame;
+constexpr size_t   MidiInQueue::kMaxMessage;
+constexpr size_t   MidiInQueue::kQueueBytes;
 constexpr uint32_t PresetProtocol::kMaxTextBytes;
 constexpr uint32_t PresetProtocol::kChunkBytes;
 constexpr uint32_t PresetProtocol::kSessionTimeoutMs;
@@ -15,7 +16,7 @@ namespace {
 
 constexpr uint8_t kCmdInfo = 0x01, kCmdBegin = 0x02, kCmdData = 0x03, kCmdCommit = 0x04,
                   kCmdRevert = 0x05, kCmdRead = 0x06, kCmdAbort = 0x07, kCmdDfu = 0x08,
-                  kCmdLoad = 0x09;
+                  kCmdLoad = 0x09, kCmdDump = 0x0A;
 constexpr uint8_t kReplyFlag  = 0x40;
 constexpr size_t  kHeaderLen  = 4;    // 7D 43 53 <cmd>
 constexpr size_t  kMaxErrText = 200;  // ParseError body cap
@@ -28,8 +29,8 @@ uint32_t getU32(const uint8_t* p) {
 
 // Frames Handle() can answer: our header (7D 43 53 <cmd> ...) or a Universal
 // Non-Real-Time Identity Request (7E <id> 06 01). Hosts may send several devices'
-// frames back to back in one USB transfer; latching only these keeps ours from
-// being dropped behind a foreign frame that would otherwise occupy the slot.
+// frames back to back in one USB transfer; queueing only these keeps foreign frames
+// from taking queue space.
 bool latchable(const uint8_t* f, size_t n) {
     return (n >= kHeaderLen && f[0] == kSysExManufacturer && f[1] == kSysExTag0 && f[2] == kSysExTag1)
            || (n == 4 && f[0] == 0x7E && f[2] == 0x06 && f[3] == 0x01);
@@ -48,40 +49,67 @@ uint32_t Fnv1a32(const void* data, uint32_t length) {
 }
 
 /*
- * SysExAssembler
+ * MidiInQueue
  */
 
-void SysExAssembler::Feed(const uint8_t* data, size_t size) {
+void MidiInQueue::Feed(const uint8_t* data, size_t size) {
     for (size_t i = 0; i < size; ++i) {
         const uint8_t b = data[i];
-        if (ready_) continue;      // slot busy until the main loop releases it
-        if (b >= 0xF8) continue;   // real-time bytes may interleave anywhere
+        if (b >= 0xF8) continue;  // real-time bytes may interleave anywhere
         if (b == 0xF0) {
-            inFrame_ = true; len_ = 0; overflow_ = false;
+            inSysex_ = true; sysexLen_ = 0; overflow_ = false;
+            status_ = 0; have_ = 0;
         } else if (b == 0xF7) {
-            if (inFrame_ && !overflow_ && latchable(buf_, len_)) {
-                std::atomic_signal_fence(std::memory_order_seq_cst);
-                ready_ = true;
-            }
-            inFrame_ = false;
-        } else if (b & 0x80) {
-            inFrame_ = false;      // any other status byte aborts the frame
-        } else if (inFrame_) {
-            if (len_ < kMaxFrame) buf_[len_++] = b;
+            if (inSysex_ && !overflow_ && latchable(sysex_, sysexLen_)) push(sysex_, sysexLen_);
+            inSysex_ = false;
+            status_ = 0; have_ = 0;
+        } else if (b >= 0xF1) {  // F1-F6: system common
+            inSysex_ = false;
+            status_ = 0; have_ = 0;
+        } else if (b & 0x80) {   // 80-EF: a channel message starts
+            inSysex_ = false;
+            status_ = b; have_ = 0;
+        } else if (inSysex_) {
+            if (sysexLen_ < kMaxMessage) sysex_[sysexLen_++] = b;
             else overflow_ = true;
+        } else if (status_) {
+            data_[have_++] = b;
+            const uint8_t kind = status_ & 0xF0;
+            const uint8_t need = (kind == 0xC0 || kind == 0xD0) ? 1 : 2;
+            if (have_ == need) {
+                if (kind == 0xB0 || kind == 0xC0) {
+                    const uint8_t msg[3] = {status_, data_[0], data_[1]};
+                    push(msg, 1u + need);
+                }
+                have_ = 0;  // running status: the next data byte starts another message
+            }
         }
     }
 }
 
-bool SysExAssembler::Ready() const {
-    if (!ready_) return false;
+void MidiInQueue::push(const uint8_t* msg, size_t len) {
+    const size_t head = head_;
     std::atomic_signal_fence(std::memory_order_seq_cst);
-    return true;
+    if (kQueueBytes - (head - tail_) < 2 + len) return;  // dropped whole
+    size_t at = head;
+    ring_[at++ & (kQueueBytes - 1)] = static_cast<uint8_t>(len & 0xFF);
+    ring_[at++ & (kQueueBytes - 1)] = static_cast<uint8_t>(len >> 8);
+    for (size_t i = 0; i < len; ++i) ring_[at++ & (kQueueBytes - 1)] = msg[i];
+    std::atomic_signal_fence(std::memory_order_seq_cst);  // record written before publishing
+    head_ = at;
 }
 
-void SysExAssembler::Release() {
-    std::atomic_signal_fence(std::memory_order_seq_cst);
-    ready_ = false;
+size_t MidiInQueue::Pop(uint8_t* out) {
+    const size_t tail = tail_;
+    if (tail == head_) return 0;
+    std::atomic_signal_fence(std::memory_order_seq_cst);  // head read before the record
+    size_t at = tail;
+    size_t len = ring_[at++ & (kQueueBytes - 1)];
+    len |= static_cast<size_t>(ring_[at++ & (kQueueBytes - 1)]) << 8;
+    for (size_t i = 0; i < len; ++i) out[i] = ring_[at++ & (kQueueBytes - 1)];
+    std::atomic_signal_fence(std::memory_order_seq_cst);  // record read before releasing it
+    tail_ = at;
+    return len;
 }
 
 size_t PackSysExUsbMidi(const uint8_t* msg, size_t len, uint8_t* out, size_t outCap) {
@@ -288,6 +316,12 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         put(static_cast<uint8_t>(currentPreset_ & 0x7F));
         endReply();
         return UploadAction::None;
+
+    case kCmdDump:
+        // The caller queues the state report before sending this reply.
+        if (n != 0) break;
+        reply(cmd, UploadStatus::Ok);
+        return UploadAction::Dump;
 
     default:
         break;

@@ -1,14 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  createSysexAssembler,
-  decodeInfo,
-  fnv1a32,
-  getU32,
-  parseIdentityReply,
-  parseReply,
-  u21,
-  u32,
-} from "./protocol";
+import { createMidiAssembler, decodeInfo, fnv1a32, getU32, parseIdentityReply, parseReply, u21, u32 } from "./protocol";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -58,10 +49,10 @@ describe("codec", () => {
   });
 });
 
-describe("SysEx assembler", () => {
+describe("MIDI assembler", () => {
   const collect = () => {
     const out: number[][] = [];
-    return { out, feed: createSysexAssembler((m) => out.push([...m])) };
+    return { out, feed: createMidiAssembler((m) => out.push([...m])) };
   };
 
   it("joins a frame split across calls and strips real-time bytes", () => {
@@ -72,18 +63,43 @@ describe("SysEx assembler", () => {
     expect(out).toEqual([[0xf0, 0x7d, 0x43, 0x53, 0x41, 0x00, 0xf7]]);
   });
 
-  it("drops a frame aborted by a channel status byte", () => {
+  it("drops a frame aborted by a channel status byte and emits the channel message", () => {
     const { out, feed } = collect();
     feed(Uint8Array.from([0xf0, 0x7d, 0x43, 0x90, 0x40, 0x7f, 0x53, 0xf7]));
-    expect(out).toEqual([]);
+    expect(out).toEqual([[0x90, 0x40, 0x7f]]);
     feed(Uint8Array.from([0xf0, 0x01, 0xf7]));
-    expect(out).toEqual([[0xf0, 0x01, 0xf7]]);
+    expect(out).toEqual([
+      [0x90, 0x40, 0x7f],
+      [0xf0, 0x01, 0xf7],
+    ]);
   });
 
   it("restarts on a second F0", () => {
     const { out, feed } = collect();
     feed(Uint8Array.from([0xf0, 0x11, 0xf0, 0x22, 0xf7]));
     expect(out).toEqual([[0xf0, 0x22, 0xf7]]);
+  });
+
+  it("emits a CC between two SysEx messages in order", () => {
+    const { out, feed } = collect();
+    feed(Uint8Array.from([0xf0, 0x11, 0xf7, 0xb0, 0x46, 0x40, 0xf0, 0x22, 0xf7]));
+    expect(out).toEqual([
+      [0xf0, 0x11, 0xf7],
+      [0xb0, 0x46, 0x40],
+      [0xf0, 0x22, 0xf7],
+    ]);
+  });
+
+  it("emits a note on as one message, keeps running status and ignores stray data", () => {
+    const { out, feed } = collect();
+    feed(Uint8Array.from([0x05, 0x90, 0x40]));
+    feed(Uint8Array.from([0x7f, 0x41, 0x00, 0xc2, 0x03, 0x04]));
+    expect(out).toEqual([
+      [0x90, 0x40, 0x7f],
+      [0x90, 0x41, 0x00],
+      [0xc2, 0x03],
+      [0xc2, 0x04],
+    ]);
   });
 });
 

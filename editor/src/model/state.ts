@@ -1,8 +1,10 @@
+import { fromQ, sameAt14 } from "../midi/control";
 import {
   type BankDoc,
   deletePreset,
   docText,
   duplicatePreset,
+  formatFloat32,
   formatNorm,
   loadBank,
   MAX_NAME_BYTES,
@@ -11,7 +13,7 @@ import {
   setField,
   TOTAL_LINE_COUNT,
 } from "./bank";
-import { type Board, KNOB_TARGETS, type PageId, toggleCount, toggleTargets } from "./schema";
+import { type Board, KNOB_TARGETS, PARAMS, type PageId, toggleCount, toggleTargets } from "./schema";
 
 export type Source = "project" | "file" | "pedal";
 
@@ -37,6 +39,10 @@ export interface EditorState {
   error: string | null;
   /** The board the bank is for: its `board` key, or the pedal's board when read from the pedal. */
   board: Board;
+  /** FNV-1a of the pedal bank this doc is, preset for preset; null when unknown or the layout changed. */
+  pedalHash: number | null;
+  /** Bumped whenever the doc newly becomes the pedal's bank. */
+  pedalEpoch: number;
 }
 
 export type ScalarField =
@@ -56,8 +62,11 @@ export const mapSpec = (kind: MapKind, board: Board) =>
     : ({ prop: "toggleMap", table: "toggle_map", slots: toggleCount(board), targets: toggleTargets(board) } as const);
 
 export type Action =
-  /** `board`: the pedal's, when the text came from it; else the bank's own `board` key decides. */
-  | { type: "load"; text: string; source: Source; fileName: string | null; board?: Board }
+  /** `board`: the pedal's, when the text came from it; else the bank's own `board` key decides. `pedalHash`: the text is the pedal's bank. */
+  | { type: "load"; text: string; source: Source; fileName: string | null; board?: Board; pedalHash?: number }
+  | { type: "pedalBank"; hash: number }
+  | { type: "pedalPreset"; preset: number }
+  | { type: "liveParam"; preset: number; key: string; q: number }
   | { type: "select"; preset: number }
   | { type: "page"; page: PageId }
   | { type: "setParam"; key: string; value: number }
@@ -81,6 +90,8 @@ export const initialState: EditorState = {
   fileName: null,
   error: null,
   board: "terrarium",
+  pedalHash: null,
+  pedalEpoch: 0,
 };
 
 export const isDirty = (s: EditorState): boolean => s.doc !== null && docText(s.doc) !== s.savedText;
@@ -148,13 +159,16 @@ export const SCALAR_PROP: Record<ScalarField, Exclude<(typeof SETUP_FIELDS)[numb
   max_delay_lines: "maxDelayLines",
 };
 
-/** Patches one field of the selected preset in both the text and the parsed copy. */
-function edit(s: EditorState, field: string, literal: string, update: Partial<Preset>): EditorState {
-  const doc = setField(s.doc!, s.selected, field, literal);
+/** Patches one field of preset `index` in both the text and the parsed copy. */
+function editAt(s: EditorState, index: number, field: string, literal: string, update: Partial<Preset>): EditorState {
+  const doc = setField(s.doc!, index, field, literal);
   const presets = [...s.presets];
-  presets[s.selected] = { ...presets[s.selected]!, ...update };
+  presets[index] = { ...presets[index]!, ...update };
   return { ...s, doc, presets };
 }
+
+const edit = (s: EditorState, field: string, literal: string, update: Partial<Preset>): EditorState =>
+  editAt(s, s.selected, field, literal, update);
 
 /** Reparses text the editor produced itself; failure would be an editor bug. */
 function reload(text: string, board: Board) {
@@ -179,6 +193,8 @@ export function reducer(s: EditorState, a: Action): EditorState {
       fileName: a.fileName,
       error: null,
       board: r.board,
+      pedalHash: a.pedalHash ?? null,
+      pedalEpoch: a.pedalHash !== undefined ? s.pedalEpoch + 1 : s.pedalEpoch,
     };
   }
   if (a.type === "page") return { ...s, page: a.page };
@@ -192,6 +208,31 @@ export function reducer(s: EditorState, a: Action): EditorState {
   switch (a.type) {
     case "select":
       return a.preset >= 0 && a.preset < s.presets.length ? { ...s, selected: a.preset } : s;
+
+    case "pedalBank":
+      return s.pedalHash === a.hash ? s : { ...s, pedalHash: a.hash, pedalEpoch: s.pedalEpoch + 1 };
+
+    case "pedalPreset":
+      return s.pedalHash !== null && a.preset >= 0 && a.preset < s.presets.length ? { ...s, selected: a.preset } : s;
+
+    case "liveParam": {
+      const target = s.presets[a.preset];
+      const current = target?.params[a.key];
+      if (s.pedalHash === null || !target || current === undefined || sameAt14(a.key, current, a.q)) return s;
+      let literal: string;
+      switch (PARAMS[a.key]?.kind) {
+        case "switch":
+          literal = formatNorm(a.q >= 8192 ? 1 : 0);
+          break;
+        case "select3":
+          literal = formatNorm(Math.round(fromQ(a.q) * 2) / 2);
+          break;
+        default:
+          literal = formatFloat32(fromQ(a.q));
+      }
+      const value = Number(literal);
+      return editAt(s, a.preset, `params.${a.key}`, literal, { params: { ...target.params, [a.key]: value } });
+    }
 
     case "setParam": {
       if (!(a.key in preset.params)) return s;
@@ -247,14 +288,28 @@ export function reducer(s: EditorState, a: Action): EditorState {
       doc = setField(doc, index, "name", `"${preset.name.slice(0, MAX_NAME_BYTES - 5)} copy"`);
       doc = setField(doc, index, "blinks", String(Math.min(index + 1, 20)));
       const origins = [...s.origins, { index: s.origins[s.selected]!.index, added: true }];
-      return { ...s, doc, presets: reload(docText(doc), s.board).presets, origins, selected: index };
+      return {
+        ...s,
+        doc,
+        presets: reload(docText(doc), s.board).presets,
+        origins,
+        selected: index,
+        pedalHash: null,
+      };
     }
 
     case "delete": {
       if (s.presets.length <= 1) return s;
       const { doc, presets } = reload(docText(deletePreset(s.doc, s.selected)), s.board);
       const origins = s.origins.filter((_, i) => i !== s.selected);
-      return { ...s, doc, presets, origins, selected: Math.min(s.selected, presets.length - 1) };
+      return {
+        ...s,
+        doc,
+        presets,
+        origins,
+        selected: Math.min(s.selected, presets.length - 1),
+        pedalHash: null,
+      };
     }
   }
 }

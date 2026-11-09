@@ -35,8 +35,9 @@ ComputerRoom/
 │   ├── stored_bank.h          # Uploaded-bank QSPI layout + ValidStoredBankText() boot check (host-portable)
 │   ├── cpu_load.h             # CpuLoadWindow: per-second audio callback load for LOAD (host-portable)
 │   ├── sdram_pool.h/.cpp      # custom_pool_allocate() SDRAM bump pool + dedicated TOML parse arena (boot + USB upload)
-│   ├── preset_protocol.h/.cpp # USB-MIDI SysEx preset upload protocol v1 (host-portable; docs/USB_MIDI.md)
-│   ├── usb_midi_link.h/.cpp   # UsbMidiLink: USB-MIDI receive/reply over daisy::MidiUsbTransport
+│   ├── preset_protocol.h/.cpp # USB-MIDI SysEx preset protocol v1 + MidiInQueue receive framing (host-portable; docs/USB_MIDI.md)
+│   ├── midi_control.h/.cpp    # MIDI live control: CC/NRPN table, MidiInDecoder, MidiReporter, ControlMailbox (host-portable; docs/MIDI.md)
+│   ├── usb_midi_link.h/.cpp   # UsbMidiLink: USB-MIDI receive queue + queued, non-blocking send over daisy::MidiUsbTransport
 │   ├── knob_bank.h            # KnobBank absolute knob takeover (park, 50 ms glide, track; host-portable)
 │   ├── toggle_bank.h          # ToggleBank parked toggle takeover (host-portable)
 │   ├── footswitch_gestures.h  # FootswitchGestures: FS1/FS2 tap, hold, 5 s save and restore chords (host-portable)
@@ -50,21 +51,24 @@ ComputerRoom/
 │   ├── footswitch_gestures_test.cpp
 │   ├── preset_bank_test.cpp
 │   ├── engine_alloc_test.cpp  # CloudSeed engine: SetParameter()/Process() never allocate
-│   ├── preset_protocol_test.cpp # SysEx assembler, USB-MIDI packer, protocol state machine, Identity Reply, DFU, end-to-end via the parser
+│   ├── allpass_clear_test.cpp # ModulatedAllpass lazy clear: never replays stale ring content
+│   ├── preset_protocol_test.cpp # MidiInQueue framing, USB-MIDI packer, protocol state machine, Identity Reply, DFU, DUMP, end-to-end via the parser
+│   ├── midi_control_test.cpp  # MIDI control table, CC/NRPN/PC decoder, reporter, control mailbox
 │   ├── stored_bank_test.cpp   # ValidStoredBankText(): which stored bank the pedal boots
 │   └── fixtures/two_presets.toml  # Parser fixture (Chorus + Through the Looking Glass)
 │       fixtures/two_presets_hothouse.toml  # The same two presets as a HotHouse bank
 ├── docs/
-│   ├── HARDWARE_TESTS.md      # On-pedal validation checklist per revision (USB-MIDI link, audio regressions)
+│   ├── HARDWARE_TESTS.md      # On-pedal validation checklist per revision (USB-MIDI link, MIDI live control, audio regressions)
 │   ├── PERFORMANCE.md         # Record of applied performance/correctness fixes (with file/line anchors)
-│   ├── USB_MIDI.md            # USB-MIDI preset upload protocol, for host (browser) authors
+│   ├── USB_MIDI.md            # USB-MIDI SysEx preset protocol, for host (browser) authors
+│   ├── MIDI.md                # MIDI live control (CC/NRPN/Program Change) spec + implementation chart
 │   └── pedal.png              # Pedal/control artwork
 ├── presets.toml           # Terrarium built-in preset bank (10 presets); an uploaded bank in QSPI can override it
 ├── presets_hothouse.toml  # HotHouse built-in preset bank (10 presets)
 ├── third_party/tomlc99/   # Vendored TOML parser (MIT, commit in README.txt)
 ├── tools/                 # preset_check.cpp (host-side preset bank validator, --board terrarium|hothouse),
 │                          # usb_preset_host.py (Linux USB-MIDI test host for docs/HARDWARE_TESTS.md;
-│                          # also sends the Identity Request and the DFU command)
+│                          # also sends the Identity Request, the DFU command, CC/NRPN/PC, DUMP, monitor)
 ├── editor/                # Browser preset editor (Preact, Web MIDI; Bun >= 1.4.2, no Node/npm):
 │                          # src/midi/ protocol v1 client + Web MIDI transport; src/model/ bank
 │                          # text model + validator mirroring src/preset_bank.cpp, schema,
@@ -170,8 +174,8 @@ secondary bank is selected while **the preset footswitch (FOOTSWITCH_2) is held*
 default map in every preset reproduces the historical assignment (knobs identical on both boards):
 
 ```cpp
-// Knob read: src/cloudseed.cpp:478-480; scan + dispatch: src/cloudseed.cpp:366-375;
-// applyKnobTarget(): src/cloudseed.cpp:224-257
+// Knob read: src/cloudseed.cpp:545-547; scan + dispatch: src/cloudseed.cpp:428-437;
+// applyKnobTarget(): src/cloudseed.cpp:250-277
 //                        primary (_a)                      secondary (_b)
 KNOB_1: output.DryOut                        | input.PreDelay
 KNOB_2: output.EarlyOut                      | input.HighPass   (+ HiPassEnabled on first touch)
@@ -180,8 +184,8 @@ KNOB_4: late_diffusion.LateDiffusionFeedback | late.LineModAmount
 KNOB_5: early.TapDecay                       | late.LineModRate
 KNOB_6: late.LineDecay                       | reverse.delay    (20-2000 ms reverse window)
 
-// Toggle read: src/cloudseed.cpp:481-484 (hw.TogglePosition()); scan + dispatch:
-// src/cloudseed.cpp:377-384; applyToggleTarget(): src/cloudseed.cpp:263-290.
+// Toggle read: src/cloudseed.cpp:549-551 (hw.TogglePosition()); scan + dispatch:
+// src/cloudseed.cpp:441-446; applyToggleTarget(): src/cloudseed.cpp:283-310.
 // Primary (_a) = secondary (_b) in every shipped preset.
 // Terrarium (presets.toml), two positions; on/off targets are on when Up:
 SWITCH_1: "delay_lines.max"    off = the preset's default_delay_lines, on = its max_delay_lines
@@ -229,18 +233,18 @@ presses and releases may be arbitrarily staggered: while it lasts neither releas
 chord shorter than 5 s does nothing at all. An FS1 hold that turns into a chord no longer counts
 toward a save. A falling edge without a prior `Pressed()` is ignored. The callback calls
 `MarkEdited()` when a bank-1 `Scan()` returns at least one knob or toggle write
-(`src/cloudseed.cpp:389-390`), i.e. a secondary knob moved past `kKnobMoveThreshold` and wrote, or a
+(`src/cloudseed.cpp:451-452`), i.e. a secondary knob moved past `kKnobMoveThreshold` and wrote, or a
 secondary toggle was flipped; brushing a knob below the threshold does not cancel the preset
 change, and entering bank 1 re-parks both (zero writes), so pressing FS2 is never itself an edit.
-The bank is derived from `PresetHeld()` after `Update()` in the same callback (`src/cloudseed.cpp:486`),
+The bank is derived from `PresetHeld()` after `Update()` in the same callback (`src/cloudseed.cpp:541`),
 so the block that ends a hold already scans in bank 0. `processFootswitches()`
-(`src/cloudseed.cpp:329-354`) reads each accessor once per callback,
+(`src/cloudseed.cpp:349-374`) reads each accessor once per callback,
 because edge flags are only valid for the update in which they occur, and turns the events into
 `state.bypass`, `state.triggerPresetChange`, `gSaveRequested`, and `state.triggerPresetRestore`.
 
 **Knob take-over** ([src/knob_bank.h](src/knob_bank.h)): knobs are **absolute** - once a knob has taken
 over, its position *is* the parameter value - but **parked** across transitions.
-`KnobBank` is a class whose only public member is `Scan()`; its private `Reset()` snapshots every knob position and parks it; a parked knob writes nothing, so
+`KnobBank` is a class whose public members are `Scan()` and `Repark(knob)` (park one knob at the next `Scan()`, called by `applyMidiWrites()` when a MIDI write hits that knob's target; see "MIDI live control"); its private `Reset()` snapshots every knob position and parks it; a parked knob writes nothing, so
 power-up, a preset load, and entering or leaving the secondary bank never change a parameter on
 their own, and a freshly loaded preset sounds exactly as authored until a knob is turned. A knob
 goes live once it moves `kKnobMoveThreshold` (0.01 of travel) from its snapshot. It then
@@ -248,7 +252,7 @@ goes live once it moves `kKnobMoveThreshold` (0.01 of travel) from its snapshot.
 moving) position over `kKnobGlideBlocks` (50) audio blocks = 50 ms, landing exactly on the pot.
 The glide exists because engine parameters are not smoothed downstream
 (`ReverbChannel::SetParameter` assigns the output levels directly,
-`CloudSeed/ReverbChannel.h:317-328`), so a step would click. After the glide the knob writes its
+`CloudSeed/ReverbChannel.h:271-282`), so a step would click. After the glide the knob writes its
 own position whenever that changes by `kKnobApplyEpsilon` (0.001), which keeps ADC noise off the
 engine.
 
@@ -273,13 +277,13 @@ next turn glides its primary target to the knob's position - a smooth jump, by d
 deliberately no pickup/crossing rule (it reintroduces the dead-zone feel).
 
 `KnobBank::Scan()` is the whole per-callback decision, called from `updateEngineControls()`
-(`src/cloudseed.cpp:366-375`): it re-parks on a bank change (`bank != activeBank`), when
+(`src/cloudseed.cpp:428-437`): it re-parks on a bank change (`bank != activeBank`), when
 `state.controlResetPending` is set (by `loadPresetGated()` before the load,
-`src/cloudseed.cpp:211-221`), or on the first call; a re-parking call returns zero writes. It never
+`src/cloudseed.cpp:220-232`), or on the first call; a re-parking call returns zero writes. It never
 runs while `state.presetChangeInProgress` is set (the callback passes audio through and returns
-first, `src/cloudseed.cpp:472-476`) because the re-park must not straddle a `state.knobMap` rewrite;
+first, `src/cloudseed.cpp:534-538`) because the re-park must not straddle a `state.knobMap` rewrite;
 `controlResetPending` simply stays set until the load completes.
-The glide start values come from `knobTargetValue()` (`src/cloudseed.cpp:295-316`), read for the
+The glide start values come from `knobTargetValue()` (`src/cloudseed.cpp:315-336`), read for the
 active bank every callback: knob values are stored verbatim in `parameters[]` by `SetParameter`,
 so `GetAllParameters()` read-back is exact; the `reverse.delay` pseudo-target has no
 `parameters[]` slot and is tracked in `state.reverseDelayNorm` instead (set by `loadPreset()`
@@ -290,7 +294,7 @@ reports its open end instead of its stored cutoff (`HighPass` 0.0 while `HiPassE
 stepping to the stored cutoff (about 2 kHz in Chorus and Dark Plate).
 
 `main()` settles the knob one-poles for 200 ms between `hw.StartAdc()` and `hw.StartAudio()`
-(`src/cloudseed.cpp:663-682`). `AnalogControl` starts at 0.0 and only converges while
+(`src/cloudseed.cpp:802-821`). `AnalogControl` starts at 0.0 and only converges while
 `ProcessAnalogControls()` runs, which otherwise first happens inside the audio callback: without
 the settle loop the first snapshot would capture ~5 % of each real knob position and the
 settling ramp itself would be read as a deliberate turn at every power-up.
@@ -298,7 +302,7 @@ settling ramp itself would be read as a deliberate turn at every power-up.
 **ADC smoothing**: libdaisy's default `AnalogControl` slew computes to `coeff_ = 1.0` at this
 callback rate (`libdaisy/src/hid/ctrl.cpp:16` with a 1 kHz update and the 0.002 s default),
 i.e. no filtering. `main()` re-tunes every knob to `KNOB_SMOOTHING_COEFF` (0.05, ~20 ms) at
-`src/cloudseed.cpp:647-648`. Nothing may re-`Init()` the knobs afterwards (`PedalBoard::Init()`
+`src/cloudseed.cpp:786-787`. Nothing may re-`Init()` the knobs afterwards (`PedalBoard::Init()`
 does it once, after setting the block size), or the coefficient is overwritten.
 
 **Toggle take-over** ([src/toggle_bank.h](src/toggle_bank.h)): the toggles (4 on Terrarium, 3 on
@@ -312,8 +316,8 @@ writes its position (`kToggleDown` 0 / `kToggleMiddle` 1 / `kToggleUp` 2) immedi
 threshold, no epsilon: the target is discrete so there is nothing to debounce beyond the
 snapshot compare) and keeps writing on every later change. `updateEngineControls()` calls
 `gToggles.Scan(bank, reset, togglePositions, toggleWrites)` right after the knob scan, reusing
-the same `reset` flag (`state.controlResetPending`) and `bank` (`src/cloudseed.cpp:377-384`),
-then dispatches each write through `applyToggleTarget()` (`src/cloudseed.cpp:263-290`). On/off
+the same `reset` flag (`state.controlResetPending`) and `bank` (`src/cloudseed.cpp:441-446`),
+then dispatches each write through `applyToggleTarget()` (`src/cloudseed.cpp:283-310`). On/off
 targets are on only with the lever Up (a HotHouse Middle is off): `delay_lines.max` sets
 `state.delayLines` to `DelayLines_Max` / `DelayLines_Default`, `reverse.enabled` /
 `reverse.direct_mix` set a `PedalState` bool read elsewhere in the callback, and
@@ -325,9 +329,9 @@ only) use all three positions: `delay_lines.select` sets `state.delayLines` to t
 
 A toggle that targets `input.HiPassEnabled` or `input.LowPassEnabled` **owns** that filter's
 enable: `loadPreset()` computes `state.hiPassOwnedByToggle` / `state.lowPassOwnedByToggle` from
-`state.toggleMap` (`src/cloudseed.cpp:164-171`, `:200-201`), and while true `applyKnobTarget()` no
+`state.toggleMap` (`src/cloudseed.cpp:172-179`, `:208-209`), and while true `applyKnobTarget()` no
 longer auto-enables the filter on the knob's first touch and `knobTargetValue()` glides the knob
-from the stored cutoff instead of the open end (`src/cloudseed.cpp:238-247`, `:304-311`) - the toggle
+from the stored cutoff instead of the open end (`src/cloudseed.cpp:264-273`, `:323-331`) - the toggle
 is the only thing that switches the filter on or off.
 
 ### Presets
@@ -339,7 +343,7 @@ lands in `.rodata` → SRAM), and it is never modified on the pedal. A bank uplo
 (docs/USB_MIDI.md) is stored in QSPI instead and, if it is present and parses, overrides
 the built-in bank at boot until it is reverted or a different firmware image is flashed - see
 "USB-MIDI preset upload" below. Whichever bank is active is parsed once at boot into the static
-`gPresets` bank (`src/cloudseed.cpp:58`); there is still no filesystem, and the active bank's
+`gPresets` bank (`src/cloudseed.cpp:59`); there is still no filesystem, and the active bank's
 text is never modified in place. Changing the built-in bank means editing the TOML and
 reflashing; a sound saved on the pedal (FS1 held 5 s) is stored separately in QSPI and overrides
 its preset's engine values, within whichever bank is active, until it is restored (see "User
@@ -405,12 +409,12 @@ Looking Glass" (`max_delay_lines = 4.0`) - it is CPU-intensive and crackles abov
   (`board` + `count` + `PresetData[16]`); `PresetData::params[]` is indexed by `(int)Parameter`.
   `ParsePresetBank()`, `ParsePresetBankText()` and `ParsePresetText()` all take the `Board`
 - Applied with `CloudSeed::ReverbController::LoadPreset()`
-  (`CloudSeed/ReverbController.h:47`), which copies every slot except `LineCount`
+  (`CloudSeed/ReverbController.h:34`), which copies every slot except `LineCount`
   and then re-applies all 50 through `SetParameter`
-- Cycles using modulo operator: `(currentPreset + 1) % gPresets.count` (`src/cloudseed.cpp:709`)
+- Cycles using modulo operator: `(currentPreset + 1) % gPresets.count` (`src/cloudseed.cpp:848`)
 - Preset index is persisted to QSPI flash, so **the order in presets.toml is frozen**;
   reordering or deleting entries requires bumping `SETTINGS_VERSION` (`src/pedal_storage.cpp:5`)
-- `loadPreset()` (`src/cloudseed.cpp:175-207`) is the only reader of `gPresets` after boot. It loads
+- `loadPreset()` (`src/cloudseed.cpp:183-215`) is the only reader of `gPresets` after boot. It loads
   the preset's saved user edit if its `UserPreset` slot is valid, else the factory values:
   `LoadPreset()` with the chosen `params`, `applyReverseWindow()` with the chosen reverse window,
   and `state.delayLines` (from `UserPreset::delayLines` 0.0/0.5/1.0, or `PresetData::delayLines`)
@@ -418,14 +422,14 @@ Looking Glass" (`max_delay_lines = 4.0`) - it is CPU-intensive and crackles abov
   toggle pseudo-values. It then copies the preset's `knobMap`, `toggleMap`, `defaultDelayLines`,
   `maxDelayLines` and blink timings (never user-edited) into `PedalState`, derives
   `hiPassOwnedByToggle` / `lowPassOwnedByToggle` via `toggleMapTargets()`
-  (`src/cloudseed.cpp:164-171`), and sets `state.outputLevelsDirty`. The audio callback and
+  (`src/cloudseed.cpp:172-179`), and sets `state.outputLevelsDirty`. The audio callback and
   `ServicePresetBlink()` (handed `state.blinkPattern` by the main loop) read only those cached copies
 - The delay-line count is applied in the audio callback (`updateEngineControls()`) from
   `state.delayLines`: `DelayLines_One` = 1, `_Default` = `state.defaultDelayLines`, `_Max` =
-  `state.maxDelayLines` (`src/cloudseed.cpp:395-401`)
+  `state.maxDelayLines` (`src/cloudseed.cpp:457-463`)
 - LED2 blinks continuously to indicate active preset (N blinks = preset N)
 - A parse failure is unrecoverable: `FatalErrorLoop()` (`src/pedal_leds.cpp:45-54`, called at
-  `src/cloudseed.cpp:625`) blinks both LEDs at 5 Hz forever and never starts audio. The same loop reports an
+  `src/cloudseed.cpp:764`) blinks both LEDs at 5 Hz forever and never starts audio. The same loop reports an
   exhausted SDRAM pool and an unexpected audio block size. `make` validates the board's bank
   before embedding it, so a rejected file cannot be built into firmware in the first place
 
@@ -448,7 +452,7 @@ The current preset and the bypass state are both automatically saved to and load
 **Implementation** ([src/pedal_storage.h](src/pedal_storage.h),
 [src/pedal_storage.cpp](src/pedal_storage.cpp)): `PedalStorage` owns both
 `PersistentStorage` instances. It is constructed in `src/cloudseed.cpp` as
-`gStorage(hw.seed.qspi)` (`:110`), right after `hw`, because `PersistentStorage` needs the
+`gStorage(hw.seed.qspi)` (`:111`), right after `hw`, because `PersistentStorage` needs the
 board's `QSPIHandle&` at construction.
 
 **Settings Structure** (`src/pedal_storage.h:15-29`):
@@ -471,14 +475,14 @@ struct Settings {
 - Settings validated on load (invalid presets default to 0)
 
 **Save/Load Workflow**:
-1. **On startup**: `main()` (`src/cloudseed.cpp:652-655`) calls `gStorage.Init(active.hash)`
+1. **On startup**: `main()` (`src/cloudseed.cpp:791-794`) calls `gStorage.Init(active.hash)`
    (`src/pedal_storage.cpp:41-56`), then takes `RestoredPreset(gPresets.count)` /
    `RestoredBypass()` into `state` and calls `loadPreset()`
 2. **On preset change / bypass toggle**: nothing is written yet. `loadPresetGated()` updates
    `state.currentPreset` in the main loop; the audio callback flips `state.bypass`
-   (`src/cloudseed.cpp:337-340`)
+   (`src/cloudseed.cpp:357-360`)
 3. **In main loop**: `gStorage.ServiceSettingsSave(state.currentPreset, state.bypass)`
-   (`src/pedal_storage.cpp:107-120`, called on every pass at `src/cloudseed.cpp:716`) mirrors
+   (`src/pedal_storage.cpp:107-120`, called on every pass at `src/cloudseed.cpp:855`) mirrors
    both values into the RAM copy and restarts a `SETTINGS_SAVE_DELAY_MS` timer whenever they
    differ. Once 3 s pass without another change it saves the `Settings` store, outside the
    audio callback. A burst of preset/bypass changes therefore costs one QSPI sector erase, and
@@ -492,7 +496,7 @@ struct Settings {
 - Version mismatch triggers `RestoreDefaults()` (`src/pedal_storage.cpp:54-55`); the defaults are then
   read straight-line, with no reload
 - First boot / version mismatch defaults to preset 0 and `bypass = true` (`src/pedal_storage.cpp:42`)
-- LED1 is re-synced to the restored bypass state after load (`src/cloudseed.cpp:659-660`)
+- LED1 is re-synced to the restored bypass state after load (`src/cloudseed.cpp:798-799`)
 - Non-blocking: flash writes happen in the main loop, not the audio callback
 - Settings survive power cycles, firmware updates, and manual resets
 
@@ -543,7 +547,7 @@ just a reflash.
 the words between the linker symbols `_stext` and `_etext`, which bound `.text` + `.rodata`
 (`libdaisy/core/STM32H750IB_sram.lds:36,47`) and include the embedded preset bank.
 `PedalStorage::Init(presetBankHash)` (`src/pedal_storage.cpp:41-56`, called from `main()` at
-`src/cloudseed.cpp:652` as `gStorage.Init(active.hash)`, before the first `loadPreset()`) mixes
+`src/cloudseed.cpp:791` as `gStorage.Init(active.hash)`, before the first `loadPreset()`) mixes
 that image hash with the FNV-1a hash of whichever bank text is active
 (`(imageHash() ^ presetBankHash) * 16777619u`) into `UserPresets::identity`, and calls
 `RestoreDefaults()` (one sector erase) when the stored `identity` differs. Any code change, any
@@ -555,14 +559,14 @@ are unaffected by either hash.
 **Save** (FS1 held 5 s): `processFootswitches()` sets `gSaveRequested`. On the next callback
 with the preset-change gate open, the callback copies `GetAllParameters()`, `state.reverseDelayNorm`
 and the three toggle pseudo-values into `gSaveSnapshot`, marks it valid, and publishes it with
-`state.saveSnapshotReady` (`src/cloudseed.cpp:491-501`). The main loop (`:687-694`) copies the
+`state.saveSnapshotReady` (`src/cloudseed.cpp:556-566`). The main loop (`:826-833`) copies the
 snapshot into `gStorage.UserSlot(state.currentPreset)`, clears the flag, calls
 `gStorage.SaveUserPresets()` (a
 blocking erase + write in the main loop; audio keeps running from SRAM), and starts the
 confirmation blink.
 
 **Restore** (FS1 + FS2 held 5 s): the callback sets `state.triggerPresetRestore`. The main
-loop (`src/cloudseed.cpp:695-701`) clears the slot to `UserPreset{}` (invalid), reloads the preset through
+loop (`src/cloudseed.cpp:834-840`) clears the slot to `UserPreset{}` (invalid), reloads the preset through
 `loadPresetGated()`, which parks the knobs and toggles and drops any unsaved tweaks, calls
 `SaveUserPresets()`, and starts the confirmation blink. The save is skipped when the slot was already empty.
 
@@ -578,22 +582,28 @@ re-set to the bypass state and LED2 goes back to the preset pattern. This is dis
 ### USB-MIDI preset upload
 
 The Seed's micro-USB port enumerates as a class-compliant USB-MIDI device at every boot
-(`gMidiLink.Init()`, `src/cloudseed.cpp:677`, shortly before `hw.StartAudio()`); no driver
+(`gMidiLink.Init()`, `src/cloudseed.cpp:816`, shortly before `hw.StartAudio()`); no driver
 and no button press are needed. A Web MIDI host (typically a browser page) can upload a complete
 `presets.toml` text over SysEx, read the active bank's text back, revert to the bank built
 into the firmware, or restart the pedal into the Daisy bootloader's DFU mode (for example from a
 firmware-switching host, so `dfu-util` can flash with no buttons). Protocol v1 (`F0 7D 43 53 <cmd>
-... F7`; INFO/BEGIN/DATA/COMMIT/REVERT/READ/ABORT/DFU/LOAD) is defined normatively in
+... F7`; INFO/BEGIN/DATA/COMMIT/REVERT/READ/ABORT/DFU/LOAD/DUMP) is defined normatively in
 [src/preset_protocol.h](src/preset_protocol.h) and documented for host authors in
-[docs/USB_MIDI.md](docs/USB_MIDI.md). `0x08 DFU` and `0x09 LOAD` are additive, so `kProtocolVersion` stays 1 (the
-editor rejects any other version). INFO's body ends with `currentPreset` (0-based index of the
-preset playing, set each main-loop pass by `serviceUsbPresetLink()` through
-`PresetProtocol::SetCurrentPreset()`), making it 17 bytes; older firmware sends 16, and hosts
+[docs/USB_MIDI.md](docs/USB_MIDI.md). `0x08 DFU`, `0x09 LOAD` and `0x0A DUMP` are additive, so
+`kProtocolVersion` stays 1 (the editor rejects any other version). `0x0A DUMP` answers `Ok` with
+no body, after queueing the complete live-state report (Program Change + CC + NRPN for all 54
+controls, see "MIDI live control" below) ahead of the reply, so a host holding the reply has the
+whole state. The same port also carries MIDI live control (CC / NRPN / Program Change in both
+directions, [docs/MIDI.md](docs/MIDI.md)); hosts skip everything that is not SysEx when waiting
+for a reply. INFO's body ends with `currentPreset` (0-based index of the
+preset playing, set by `handleSysEx()` through `PresetProtocol::SetCurrentPreset()` right
+before each frame is handled, so a Program Change earlier in the same pass is reflected), making
+it 17 bytes; older firmware sends 16, and hosts
 read the missing byte as unknown. The pedal also answers the standard Universal Non-Real-Time
 Identity Request (`F0 7E <id> 06 01 F7`) with `F0 7E 7F 06 02 7D 43 53 <board> 00 00 00 00 00 <build
 id> F7`, where the member byte `<board>` (index 8 counting `F0`) is the firmware's `Board`: `00`
 Terrarium, `01` HotHouse (`PresetProtocol::Init(..., buildId, board)`, passed `kBoard` at
-`src/cloudseed.cpp:676`). That request is not a session message and leaves the session timer alone.
+`src/cloudseed.cpp:815`). That request is not a session message and leaves the session timer alone.
 Hosts read the board from it before uploading: a bank for the other board is rejected at COMMIT.
 
 **Build id**: the `Makefile` writes `build/build_id.c` (`char kBuildId[33] = "<id>";`) at parse
@@ -604,40 +614,65 @@ the `_stext.._etext` range `firmwareImageHash()` covers, and a different id move
 range, so a commit that changes no code keeps saved user presets and an uploaded bank. Do not make
 it `const` (it would move into `.text`) or let its size follow the string.
 
-**Assembler filter**: `SysExAssembler::Feed()` latches only frames `Handle()` can answer - our
-`7D 43 53` header or a 4-byte Identity Request - and drops every other complete frame at its F7.
-A host may send several devices' frames back to back in one transfer (e.g. every known
-firmware's DFU command at once); without the filter the first foreign frame would occupy the
-single slot and ours would be dropped.
+**Receive queue** (`MidiInQueue`, [src/preset_protocol.h](src/preset_protocol.h)): a 4 KB
+single-producer / single-consumer ring of length-prefixed records (`kQueueBytes`, a power of two),
+fed from the USB interrupt (`Feed()`) and drained by the main loop (`Pop()`) in arrival order.
+SysEx is queued as the bytes between F0 and F7 (at most `kMaxMessage` = 256), but only frames
+`Handle()` can answer - our `7D 43 53` header or a 4-byte Identity Request (`latchable()`,
+`src/preset_protocol.cpp:34`); every other complete frame is dropped at its F7, so a host that
+sends several devices' frames back to back in one transfer (e.g. every known firmware's DFU
+command at once) cannot hide ours. Channel messages are parsed with running status, and only
+`Bn` (Control Change) and `Cn` (Program Change) are queued, as `[status, data...]`; a popped
+message is a channel message iff `out[0] & 0x80`. Real-time bytes are ignored anywhere, and a
+message that does not fit in the free ring space is dropped whole.
 
 **Link** ([src/usb_midi_link.h](src/usb_midi_link.h), [src/usb_midi_link.cpp](src/usb_midi_link.cpp)):
 `UsbMidiLink` drives `daisy::MidiUsbTransport` directly for receive - libdaisy's `MidiHandler`
 truncates SysEx at 128 B (`libdaisy/src/hid/MidiEvent.h:2`) - and its USB-interrupt callback does
-nothing but `SysExAssembler::Feed()` (`src/preset_protocol.h`), because the USB OTG FS interrupt
+nothing but `MidiInQueue::Feed()`, because the USB OTG FS interrupt
 shares priority 0 with the audio DMA (`libdaisy/src/usbd/usbd_conf.c:102-107`,
-`libdaisy/src/sys/dma.c:17-50`). Replies bypass `MidiUsbTransport::Tx()`, which splits SysEx and
-sends the closing F7 as a packet of its own (`libdaisy/src/hid/usb_midi.cpp:294-318`): they are
-packed into USB-MIDI 1.0 event packets by `PackSysExUsbMidi()` and sent with
-`UsbHandle::TransmitInternal()`, the same CDC path.
+`libdaisy/src/sys/dma.c:17-50`); `Service()` restarts reception if the transport's ring ever
+overflowed. Send is a 4 KB queue (`queue_`) of USB-MIDI 1.0 event packets that never blocks the
+main loop: `QueueSysEx()` packs a reply with `PackSysExUsbMidi()` (bypassing
+`MidiUsbTransport::Tx()`, which splits SysEx and sends the closing F7 as a packet of its own,
+`libdaisy/src/hid/usb_midi.cpp:294-318`), and `Flush()` copies up to 512 B into one of two
+alternating transfer buffers (`txBuf_[2][512]`) and starts the IN transfer with
+`UsbHandle::TransmitInternal()`, the same CDC path; a busy endpoint leaves the queue for the next
+call, and the buffer of the transfer in flight is never touched. `FlushFor(ms)` flushes until the
+queue is empty or `ms` passed (used before a reset), `WaitForSpace(bytes, ms)` until enough room is
+free (used by DUMP). The state report is written straight into the queue tail:
+`ReserveReport(cap)` returns the tail and the room left after `kReplyReserve` (one packed
+`kMaxReply` reply), and `CommitReport(n)` queues what was written, so a reply is never refused
+for lack of room. Nothing is queued or sent until the host has configured the device
+(`configured()`: `hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED` and `pClassData` non-null):
+reports are sent without a host request, and `CDC_Transmit_FS()` dereferences `pClassData`
+unchecked (`libdaisy/src/usbd/usbd_cdc_if.c:301-303`), so on 9 V power with no cable a send
+would fault.
 
-**Main loop** (`serviceUsbPresetLink()`, `src/cloudseed.cpp:550-598`, called every pass at `:714`,
-before `gStorage.ServiceSettingsSave()`): answers one received SysEx frame through
-`PresetProtocol::Handle()`, performs the resulting `WriteStoredBank()` (COMMIT) or
-`EraseStoredBank()` (REVERT) on `gStorage`, sends the reply, and - on a successful COMMIT/REVERT,
+**Main loop** (`serviceUsbMidi()`, `src/cloudseed.cpp:705-737`, called every pass at `:853`,
+before `gStorage.ServiceSettingsSave()`): calls `gMidiLink.Service()`, hands
+`gCpuLoad.Published()` to `SetLoad()`, then pops up to `kMaxMidiMessagesPerPass` (64) received
+messages in arrival order, routing channel messages to `handleChannelMessage()`
+(`:641-658`, see "MIDI live control") and SysEx frames to `handleSysEx()` (`:663-700`).
+`handleSysEx()` answers the frame through `PresetProtocol::Handle()`, performs the resulting
+`WriteStoredBank()` (COMMIT) or `EraseStoredBank()` (REVERT) on `gStorage`, on DUMP waits up to
+50 ms for room and queues the full state report (`Invalidate()` + `reportControls()`), queues the
+reply, and - on a successful COMMIT/REVERT,
 a COMMIT that fails after already erasing the bank the pedal is currently running, or DFU -
-flushes the pending settings save, waits 100 ms for the reply's USB transfer, and resets: DFU via
+flushes the pending settings save, `FlushFor(100)` + waits 100 ms for the reply's USB transfer, and resets: DFU via
 `System::ResetToBootloader(DAISY_INFINITE_TIMEOUT)` (the bootloader then waits for `dfu-util`
 with no timeout), the others via `NVIC_SystemReset()` (the bootloader reloads the app, which
-boots the new bank). It also `Tick()`s the 5 s session timeout and keeps
-`state.uploadActive` (a `volatile bool`, `src/cloudseed.cpp:72`) in step with the session: while a
+boots the new bank). `serviceUsbMidi()` then `Tick()`s the 5 s session timeout and keeps
+`state.uploadActive` (a `volatile bool`, `src/cloudseed.cpp:73`) in step with the session: while a
 session is open the audio callback passes the input through and skips the reverb
-(`state.presetChangeInProgress || state.uploadActive`, `src/cloudseed.cpp:472`); when the session
+(`state.presetChangeInProgress || state.uploadActive`, `src/cloudseed.cpp:534`); when the session
 ends, `reverb->ClearBuffers()` runs and `state.controlResetPending` is set before `uploadActive`
 is cleared, so knobs and toggles moved during the session re-park instead of jumping the engine.
+Finally it runs `reportControls()` every `kMidiReportIntervalMs` (10 ms) and `Flush()`es once.
 
 **Validation and storage**: an upload is checked with the firmware's own parser
 (`ParsePresetText()` with `kBoard` into a dedicated `PresetBank gUploadCheck`,
-`src/cloudseed.cpp:129-136`) - the same rules `make presets-check` enforces, including the `board`
+`src/cloudseed.cpp:137-144`) - the same rules `make presets-check` enforces, including the `board`
 key, so a bank for the other board fails with `bank is for board "<file>", this pedal is
 "<this>"` - before anything reaches flash. QSPI layout
 (`src/stored_bank.h:15-26`): a `StoredBankHeader` (`magic` "CSB1", `length`, `textHash`,
@@ -653,7 +688,7 @@ discard-on-reflash rule saved user presets follow), the length is 1..`kMaxTextBy
 before the text is hashed, so a corrupt header never reads past the region), and the text hash
 matches.
 
-**Boot** (`src/cloudseed.cpp:612-628`): the stored bank is used if `StoredBankText()` returns one
+**Boot** (`src/cloudseed.cpp:754-765`): the stored bank is used if `StoredBankText()` returns one
 and it parses; otherwise the embedded bank (`EmbeddedPresetText()`,
 `src/sdram_pool.cpp:72-75`) is used, and a parse failure there is the unrecoverable
 `FatalErrorLoop()` case. Either way `gStorage.Init(active.hash)` mixes the active bank's FNV-1a
@@ -661,8 +696,9 @@ hash into the user-preset `identity` (see "Firmware + bank identity" above), so 
 revert, or a reflash all wipe saved user presets.
 
 **Tests** (`make test`): [tests/preset_protocol_test.cpp](tests/preset_protocol_test.cpp) covers
-the SysEx assembler (including the foreign-frame filter on a multi-device burst), the USB-MIDI
-packer, the Identity Reply, DFU, and the upload/read/revert state machine - framing,
+`MidiInQueue` (split frames, the foreign-frame filter on a multi-device burst, overlong frames,
+channel messages with running status, a full ring dropping whole messages, arrival order), the
+USB-MIDI packer, the Identity Reply, DFU, DUMP, and the upload/read/revert state machine - framing,
 sequencing, timeouts and error replies - plus an end-to-end upload of the parser fixture through
 USB-MIDI packets and the real parser; [tests/stored_bank_test.cpp](tests/stored_bank_test.cpp)
 covers `ValidStoredBankText()`; `ParsePresetBankText()` is covered in `preset_bank_test`. None
@@ -677,9 +713,9 @@ which loads the bank and then selects INFO's `currentPreset` (`decodeInfo()` ret
 `currentPreset: number | null`), so the editor opens on the patch the pedal is playing.
 While linked and idle it polls `0x09 LOAD` every 250 ms (`LOAD_POLL_MS`, `PresetLink.load()`;
 `PresetLink` queues requests, so a poll never overlaps another request) for the CPU meter
-(`components/CpuMeter.tsx`) at the right of the header's small LED, and for LOAD's trailing
-`currentPreset`: when it changes (a footswitch preset change) the editor selects that preset,
-but only while it holds the pedal's bank (`source === "pedal"` or SYNC). CONNECT sends the
+(`components/CpuMeter.tsx`) at the right of the header's small LED. LOAD no longer drives the
+preset follow: that comes from the pedal's live Program Change reports (see "MIDI live
+control" below). CONNECT sends the
 Identity Request and reads the board from the member byte (no reply = terrarium, older
 firmware). A board key next to PROJECT picks the built-in bank, locked to the pedal's board
 while connected. UPLOAD refuses a bank whose `board` differs from the linked pedal's, using
@@ -691,10 +727,33 @@ on hothouse only. A SCATTER page holds the Scatter parameters, the hothouse LINE
 Keep it in step with the firmware:
 - `editor/src/midi/protocol.ts` / `client.ts` port `src/preset_protocol.h` (INFO offsets as in
   `tools/usb_preset_host.py`; `parseIdentityReply()` reads the board at byte 8, and
-  `PresetLink.identify()` sends the Identity Request). `PresetLink` is stop-and-wait, and resends only INFO, READ and
+  `PresetLink.identify()` sends the Identity Request). `PresetLink` is stop-and-wait for SysEx
+  requests, only so that each reply is matched to its request (the pedal queues received
+  messages), and resends only INFO, READ and
   DATA. `upload()` / `revert()` return `null` when the pedal cannot be verified after its
   reboot: `waitForReboot()` gave up after 20 s, or INFO went unanswered. COMMIT `Ok` has
   already stored the bank at that point
+- `editor/src/midi/protocol.ts` `createMidiAssembler()` splits the input stream into SysEx
+  messages and channel voice messages (running status kept), both delivered in order.
+  `PresetLink.dump()` sends `0x0A DUMP`; `sendControl()` / `sendProgram()` send NRPN / PC
+  directly (not queued); `onLive()` subscribes to the pedal's reports
+- `editor/src/midi/control.ts` mirrors `kMidiControls` in `src/midi_control.cpp`: the same
+  54 rows in the same order (`MIDI_CONTROLS`, key `"delay_lines"` for the per-board lines
+  control and `"engage"` for bypass, both resolved by `paramKey()`), plus the 14-bit
+  conversions `toQ()` / `fromQ()` (`Math.fround(q / 16383)`, bit-identical to the firmware's
+  `NormFromQ14()`), `qFor()` / `sameAt14()`, and `createLiveDecoder()` (emits a control only on
+  CC38, a program on Cn, ignores plain CCs). A table change needs both files
+- `editor/src/midi/live.ts` `LiveSync` sends live edits (`sendParam()`, `setBypass()`),
+  ignores reports of a key it sent less than `LIVE_ECHO_MS` (300 ms) ago, forwards the
+  pedal's PC / control / Engage reports, and implements "whoever switches wins":
+  `selectPreset()` sends PC, awaits DUMP (whose reply orders after the full report), then
+  sends NRPN for every param that differs from the report at 14 bits
+- `editor/src/model/state.ts` `pedalHash` (the pedal bank this doc is, preset for preset;
+  nulled by DUP/DEL) and `pedalEpoch` (bumped whenever the doc newly becomes the pedal's bank,
+  which triggers one DUMP pull in `App.tsx`). Live is `pedalHash === info.activeHash`; then
+  `liveParam` patches preset `a.preset` with the 14-bit value (`formatFloat32(fromQ(q))` for
+  faders, so the doc text parses to the pedal's exact float), while offline `setParam` edits
+  keep six decimals. `DevicePanel` shows `LIVE` next to SYNC/DIFF and a BYPASS key
 - `editor/src/midi/webMidi.ts` finds the pedal by `/daisy/i` in the port name or manufacturer,
   and after a reboot re-polls `requestMIDIAccess()` (no `onstatechange`). Each poll attempt is
   capped at 2 s: in Firefox a Web MIDI call on a port that vanished during the reboot stayed
@@ -724,6 +783,72 @@ Keep it in step with the firmware:
   engine's routing, a new parameter, or a new pseudo-target needs the matching `BLOCKS` /
   `EFFECT` entry there; `flow.test.ts` fails when a `PARAM_KEYS` key has no block or effect
 
+### MIDI live control
+
+[docs/MIDI.md](docs/MIDI.md) is the normative spec (for controller and host authors). Every
+file-controlled preset value - the 49 engine parameters except `LineCount`, `reverse.delay`,
+`reverse.enabled`, `reverse.direct_mix` and the per-board delay-line selection - plus Engage
+(bypass) is one control with a 7-bit CC **and** a 14-bit NRPN of the same number (NRPN MSB 0);
+Program Change `p` loads preset `p`. Received on any channel, sent on channel 1. The host-portable
+module is [src/midi_control.h](src/midi_control.h) / [src/midi_control.cpp](src/midi_control.cpp)
+(no libdaisy):
+- `kMidiControls[54]` (`src/midi_control.cpp:24`) is the table: number, `MidiTarget` (`Param`,
+  `ReverseDelay`, `ReverseEnabled`, `ReverseDirectMix`, `DelayLines`, `Engage`), the `Parameter`
+  and an on/off flag. Its order is the report order. `editor/src/midi/control.ts`
+  `MIDI_CONTROLS` mirrors it row for row, so a table change (or a new parameter, see "Common
+  Modifications" 1) needs both files
+- `NormFromCc()` / `NormFromQ14()` convert to 0..1; `NormFromQ14()` divides by a `volatile`
+  16383 so `-ffast-math` cannot substitute a rounded reciprocal, which makes it bit-identical to
+  the editor's `fromQ()` (`Math.fround(q / 16383)`). On/off controls are on at >= 0.5 and stored
+  as exactly 1 / 0. `DelayLinesFromNorm()` / `DelayLinesNorm()` map the lines control:
+  Terrarium >= 0.5 Max else Default; HotHouse < 0.25 One, < 0.75 Default, else Max (NRPN
+  0-4095 / 4096-12287 / 12288-16383)
+- `MidiInDecoder` turns queued `Bn` / `Cn` messages into `MidiEvent`s (control index + value, or
+  program), omni, with NRPN selection state per channel: CC99/CC98 select, CC6 applies
+  `msb << 7`, CC38 applies `msb << 7 | lsb`, CC101/CC100 deselect, CC96/CC97 ignored
+- `ControlMailbox` hands control writes from the main loop to the audio callback: one slot per
+  control (latest value wins, nothing dropped), `Post()` in the main loop, `Drain()` in the
+  callback (round robin, at most `kMaxDrainPerBlock` = 8 per block), `Clear()` only while the
+  callback is gated off
+- `MidiReporter` keeps the last reported 7-bit and 14-bit value per control and the last program;
+  `Collect()` writes USB-MIDI packets for what changed - a Program Change first (nothing is
+  reported ahead of its preset's PC), then per control a CC when its 7-bit value changed and an
+  NRPN (CC99 0, CC98 n, CC6, CC38) when its 14-bit value changed, stopping at the room it is
+  given; `Invalidate()` makes the next `Collect()` report everything (`kMaxBytes`)
+
+**Firmware integration** (`src/cloudseed.cpp`): `handleChannelMessage()` (`:641-658`, main loop,
+ignored while an upload session is open) feeds `gMidiDecoder`. Engage is handled right there
+(`state.bypass` + LED1, like an FS1 tap) and never posted; every other control is
+`gMidiMailbox.Post()`ed. A Program Change for a preset the bank has goes through
+`selectPreset()` (`:235-238`, `loadPresetGated()` + LED2 pattern, the same path as an FS2 tap;
+the preset already playing is reloaded). In the callback, `applyMidiWrites(bank)` (`:381-416`)
+runs after the passthrough gate and before the knob read: it drains the mailbox and writes each
+value - parameters through `setParameter()` (`:241-247`, the single parameter-write helper that
+also sets `state.outputLevelsDirty` for `DryOut`/`EarlyOut`/`MainOut`), the reverse window
+through `applyReverseWindow()`, the pseudo-values into `PedalState` - and then calls
+`KnobBank::Repark(k)` for every knob of the active bank mapped to the same target, so that knob
+is parked at the next `Scan()` and takes over again from the written value (no jump back to the
+pot). Unlike a knob write there is no input-filter auto-enable and no
+`gFootswitches.MarkEdited()`, so a MIDI write during an FS2 hold does not cancel the preset
+change. `loadPresetGated()` `Clear()`s the mailbox (pending writes belong to the outgoing
+preset) and `Invalidate()`s the reporter.
+
+**Reports**: `serviceUsbMidi()` calls `reportControls()` (`:628-637`) every 10 ms: it reads each
+control's current value (`controlValue()`, `:614-624`, from `GetAllParameters()` and
+`PedalState`) and lets `gMidiReporter.Collect()` write whatever changed straight into the link's
+queue (`ReserveReport()` / `CommitReport()`); what does not fit goes out on a later call. Every
+preset load (FS2, PC, restore) and every DUMP invalidates the reporter, so the full state follows.
+The pedal does no echo suppression: a value received over MIDI is reported back like any other
+change.
+
+**Editor semantics** (details in the editor bullets under "USB-MIDI preset upload"): live editing
+is on while the editor's document is the pedal's active bank (`pedalHash === info.activeHash`;
+`pedalEpoch` triggers one DUMP pull when it becomes so). `LiveSync` (`editor/src/midi/live.ts`)
+sends NRPN / PC, ignores the pedal's report of a key it sent itself for `LIVE_ECHO_MS` (300 ms),
+and follows the pedal's PC / control / Engage reports. "Whoever switches wins": a preset change on
+either side wins; after the editor sends PC it awaits a DUMP and sends NRPN for every parameter
+whose 14-bit value differs from its document.
+
 ### Parameters
 
 50 reverb parameters enumerated in [CloudSeed/Parameter.h](CloudSeed/Parameter.h) (`Parameter::Count` == 50, `CloudSeed/Parameter.h:4-93`); 49 are file-controlled (`LineCount` is runtime-only):
@@ -743,18 +868,18 @@ Keep it in step with the firmware:
 **Seeds/Switches/Effects**: TapSeed, DiffusionSeed, DelaySeed, PostDiffusionSeed, CrossSeed, HiPassEnabled, LowPassEnabled, LowShelfEnabled, HighShelfEnabled, CutoffEnabled, LateStageTap, Interpolation
 
 **Early tap animation** (appended after `Interpolation`, in `[preset.params.early]` after `Bloom`):
-- `Scatter` - on/off (on when >= 0.5, `CloudSeed/ReverbController.h:162`); toggle target
+- `Scatter` - on/off (on when >= 0.5, `CloudSeed/ReverbController.h:134`); toggle target
   `early.Scatter` (in `kToggleParams`), and Down on the HotHouse `early.envelope` target
-- `ScatterRate` - 0.1 + Response2Dec(v) × 4.9 Hz (`:163`)
-- `ScatterDepth` - linear 0..1 (`:164`)
+- `ScatterRate` - 0.1 + Response2Dec(v) × 4.9 Hz (`:135`)
+- `ScatterDepth` - linear 0..1 (`:136`)
 
 While Scatter is on, each early tap's gain is scaled by 1 - depth × (1 + sin(2π·phase)) / 2, so
 it oscillates between (1 - depth) and 1 of its static value; every tap has its own seeded phase
 and a ±15 % rate spread, drawn from fixed seed slots after the tap pattern (`kScatterSeedBase`,
-`CloudSeed/MultitapDiffuser.h:23-26`), so adding Scatter does not change the tap pattern. The
+`CloudSeed/MultitapDiffuser.h:25-28`), so adding Scatter does not change the tap pattern. The
 tap-vs-clean mix tap (`cleanTap`) is never animated. `MultitapDiffuser::Process()`
-(`CloudSeed/MultitapDiffuser.cpp:38`) takes the unchanged static path unless `scatterActive`;
-`ProcessScatter()` (`:77`) recomputes each tap's LFO once per block and ramps the gain linearly
+(`CloudSeed/MultitapDiffuser.cpp:37`) takes the unchanged static path unless `scatterActive`;
+`ProcessScatter()` (`:71`) recomputes each tap's LFO once per block and ramps the gain linearly
 per sample across it, and keeps running after Scatter is switched off until every factor is
 back at 1 (no click). Its CPU cost is only paid while active and has not been measured on
 hardware.
@@ -785,14 +910,14 @@ void* custom_pool_allocate(size_t size) {
 
 This custom allocator manages SDRAM for delay lines. It is declared in
 [src/sdram_pool.h](src/sdram_pool.h). The reverse voice's `reverseDelayBuffer` is a separate
-`DSY_SDRAM_BSS` array in `src/cloudseed.cpp:121`, outside the pool.
+`DSY_SDRAM_BSS` array in `src/cloudseed.cpp:122`, outside the pool.
 
 Bump allocator, no free. The pool is aligned to the 32-byte M7 D-cache line and every block is
 rounded up to 8 bytes. Exhaustion is a fatal boot error (`FatalErrorLoop()`, both LEDs at 5 Hz)
 rather than a null return, because a write through 0x0 would land silently in ITCMRAM.
 `custom_pool_allocate` keeps external linkage and this exact signature: the CloudSeed headers
 declare it `extern`. Callers placement-new into it (e.g.
-`CloudSeed/ModulatedDelay.h:41-42`), so destructors of pool-backed objects must not call
+`CloudSeed/ModulatedDelay.h:40-41`), so destructors of pool-backed objects must not call
 `delete` - see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) §6.
 
 The TOML parse arena is not part of this pool: it is a separate 512 KB `DSY_SDRAM_BSS`
@@ -805,44 +930,56 @@ embedded bank (presets.toml or presets_hothouse.toml).
 
 **ReverbController** ([CloudSeed/ReverbController.h](CloudSeed/ReverbController.h)):
 - Main reverb controller
-- Preset application: `LoadPreset(const float* values)` (`:47-60`) copies a parsed
+- Preset application: `LoadPreset(const float* values)` (`:34-47`) copies a parsed
   `PresetData::params[]` into `parameters[]`, skipping only `LineCount` (written at audio rate
   from the delay-line toggle target; `Bloom` is preset data like everything
   else), then re-applies all 50 slots through `SetParameter`. The
   constructor no longer loads any preset - `main()` parses the bank and calls `LoadPreset()`
   before audio starts
-- Single channel: `channelR` and all right-channel buffers are commented out
-  (`CloudSeed/ReverbController.h:27`, `:29`, `:31`, `:37`, `:72`, `:178`, `:186`, `:199`, `:203`, `:205`, `:211`)
-- Fixed internal block size `static const int bufferSize = 48` (`CloudSeed/ReverbController.h:23`),
-  backing fixed-size member arrays (`:28-32`)
-- Public API: `LoadPreset(const float*)` `:47`, `SetParameter(Parameter, float)` `:172`,
-  `ClearBuffers()` `:183`, `Process(float* input, float* output, int bufferSize)` `:189`
+- Single channel: one `ReverbChannel channel`; the stereo remnants (`channelR`, `ChannelLR`,
+  the cross-seed of the line seeds) were removed in the engine audit (docs/PERFORMANCE.md §12)
+- Fixed internal block size `static const int bufferSize = 48` (`CloudSeed/ReverbController.h:18`);
+  `ReverbChannel` sizes its block buffers from it
+- Public API: `LoadPreset(const float*)` `:34`, `SetParameter(Parameter, float)` `:144`,
+  `ClearBuffers()` `:152`, `Process(const float* input, float* output, int bufferSize)` `:157`
+  (no copy: `ReverbChannel::Process()` reads `input` and writes `output` directly)
 - Parameter scaling (the normalized 0.0-1.0 → real-unit mapping documented in presets.toml):
-  `GetScaledParameter` `:85`. `Bloom` and `Scatter` follow the same `< 0.5 ? 0 : 1` rule as
-  every other on/off parameter (`:101`, `:162`)
+  `GetScaledParameter` `:57`. Continuous values are float; integer results (stage counts,
+  seeds, the line delay) keep upstream's double arithmetic as explicit casts. `Bloom` and
+  `Scatter` follow the same `< 0.5f ? 0 : 1` rule as every other on/off parameter (`:74`, `:134`)
+- The engine is float-only at audio rate: `CloudSeed/Makefile` builds with
+  `-Wdouble-promotion -Werror`, and the `engine_alloc_test` host build (every engine header)
+  with `-Werror=double-promotion`
 
 **ReverbChannel** ([CloudSeed/ReverbChannel.h](CloudSeed/ReverbChannel.h)):
-- Builds `TotalLineCount` (5) delay lines for the mono implementation
+- Builds `TotalLineCount` (5) delay lines (`DelayLine* lines[TotalLineCount]`, pool-backed)
+  for the mono implementation
   ([CloudSeed/DelayLineCount.h](CloudSeed/DelayLineCount.h)); `SetParameter(LineCount)` clamps the
-  active count to 1..`TotalLineCount` (`CloudSeed/ReverbChannel.h:221-231`)
+  active count to 1..`TotalLineCount` (`CloudSeed/ReverbChannel.h:165-175`)
 - Contains delay lines, diffusers, modulation
 
 **DelayLine** ([CloudSeed/DelayLine.h](CloudSeed/DelayLine.h)):
-- Core delay buffer implementation (263 lines)
+- Core delay buffer implementation (251 lines)
 - The delay buffer itself is SDRAM-pool-backed (placement-new into `custom_pool_allocate`,
-  `CloudSeed/ModulatedDelay.h:41-42`)
-- `tempBuffer`, `mixedBuffer`, and `filterOutputBuffer` are real heap allocations
-  (`CloudSeed/DelayLine.h:52-54`, freed at `:74-76`)
+  `CloudSeed/ModulatedDelay.h:40-41`)
+- `mixedBuffer` and `filterOutputBuffer` are real heap allocations
+  (`CloudSeed/DelayLine.h:49-50`, freed at `:69-70`); the feedback filters run from the
+  delay/diffuser output straight into `filterOutputBuffer`
 
-**AllpassDiffuser, MultitapDiffuser**: Diffusion stages (`MultitapDiffuser` also runs Scatter, see "Parameters")
-**ModulatedAllpass, ModulatedDelay**: Modulated processing
+**AllpassDiffuser, MultitapDiffuser**: Diffusion stages (`MultitapDiffuser` also runs Scatter, see "Parameters").
+`AllpassDiffuser` gives each of its two `ModulatedAllpass` stages a 9602-sample ring
+(`2 * MaxDelayMs` at 48 kHz + 2, the longest read with full modulation)
+**ModulatedAllpass, ModulatedDelay**: Modulated processing. `ModulatedAllpass::ClearBuffers()`
+is constant time (`CloudSeed/ModulatedAllpass.h:79`): it resets a `written` count instead of
+zeroing the ring, and `ProcessFresh()` reads every slot not yet rewritten as 0, so a diffusion
+enable flip in the audio callback costs no SDRAM sweep (`tests/allpass_clear_test.cpp`)
 
 ## Build System
 
 ### Checkout and prerequisites
 
 `libdaisy/` and `DaisySP/` are git submodules (`.gitmodules`) that the build reads
-(`Makefile:47-61`, `:76`), so a checkout without them fails at the first `include`. The
+(`Makefile:48-62`, `:77`), so a checkout without them fails at the first `include`. The
 `Terrarium/` submodule is still checked out but no longer used: the app's pin maps live in
 `src/board.h`.
 
@@ -863,7 +1000,7 @@ firmware does not need (DaisySP's `make` builds the LGPL library only if it is p
 tree plus 480 MB of git objects; `--shallow-submodules` on the clone reduces the git part.
 
 Tools: the Daisy Toolchain (`arm-none-eabi-gcc`, `make`, `dfu-util`; this tree builds with Arm GNU
-Toolchain 13.3.Rel1) and a host `gcc`/`g++` (`HOSTCC`/`HOSTCXX`, `Makefile:80-81`) - plain `make`
+Toolchain 13.3.Rel1) and a host `gcc`/`g++` (`HOSTCC`/`HOSTCXX`, `Makefile:81-82`) - plain `make`
 needs the host compilers too, because it builds `preset_check` to validate the board's bank.
 Then `make libs` once (and after every submodule update), then `make` (or `make BOARD=hothouse`).
 
@@ -871,7 +1008,7 @@ Then `make libs` once (and after every submodule update), then `make` (or `make 
 
 ```bash
 # Rebuild all libraries (libcloudseed, DaisySP, libdaisy).
-# Makefile:196-199 runs `clean all` in each, so this is a full rebuild of all three.
+# Makefile:202-205 runs `clean all` in each, so this is a full rebuild of all three.
 make libs
 
 # Or build individually:
@@ -890,7 +1027,7 @@ make BOARD=hothouse  # HotHouse: build/hothouse/, embeds presets_hothouse.toml
 `BOARD` (`Makefile:8-22`) selects the board define (`CLOUDSEED_BOARD_TERRARIUM` /
 `CLOUDSEED_BOARD_HOTHOUSE`), the embedded bank, and `BUILD_DIR = build/<board>`, so both
 boards' objects and outputs coexist; any other value is a make error. `build/build_id.c` is shared.
-`make` also runs `$(MAKE) -C CloudSeed` on every invocation (`Makefile:63-70`): the sub-make
+`make` also runs `$(MAKE) -C CloudSeed` on every invocation (`Makefile:64-71`): the sub-make
 is incremental and rebuilds `libcloudseed.a` only when a library source changed, and the ELF
 relinks only when the archive's mtime moved. A CloudSeed edit therefore never needs `make libs`.
 
@@ -906,7 +1043,7 @@ It builds `build/terrarium/preset_check` (`build/<board>/` for a `BOARD=` overri
 `tools/preset_check.cpp`, `src/preset_bank.cpp`, and the
 vendored tomlc99 (compiled as C) using `HOSTCC`/`HOSTCXX` (default `gcc`/`g++`), then runs
 `preset_check --board terrarium --validate presets.toml` and `preset_check --board hothouse
---validate presets_hothouse.toml` (`Makefile:106-108`). Unlike the stamp-gated check inside
+--validate presets_hothouse.toml` (`Makefile:107-109`). Unlike the stamp-gated check inside
 `make`, it re-runs every time. `preset_check [--board terrarium|hothouse]` (default terrarium;
 the file's `board` key must name it) requires exactly one mode: `--validate` (one-line summary; exit 1
 with the parser's message on stderr if the file is rejected), `--print-knob-map`, or
@@ -914,7 +1051,7 @@ with the parser's message on stderr if the file is rejected), `--print-knob-map`
 
 `make` cannot produce firmware from a bank the parser would reject: the embedded blob
 (`$(BUILD_DIR)/presets_toml.o`) depends on `$(BUILD_DIR)/presets.valid`, whose recipe is
-`preset_check --board $(BOARD) --validate $(PRESETS_TOML)` (`Makefile:83-101`). `preset_check` calls
+`preset_check --board $(BOARD) --validate $(PRESETS_TOML)` (`Makefile:84-102`). `preset_check` calls
 `ParsePresetBankText()` with the file's full length, exactly as the pedal does at boot, so an
 empty file or an embedded NUL byte is rejected too. Validation covers non-ASCII bytes
 (any byte >= 0x80, comments included, rejected with its line and column before tomlc99 sees the
@@ -938,7 +1075,7 @@ There is no golden-value comparison; the original factory values are recoverable
 history.
 
 A file that somehow reaches the pedal broken is unrecoverable at runtime: `FatalErrorLoop()`
-(`src/pedal_leds.cpp:45-54`, called at `src/cloudseed.cpp:625`) blinks both LEDs at 5 Hz forever and never starts
+(`src/pedal_leds.cpp:45-54`, called at `src/cloudseed.cpp:764`) blinks both LEDs at 5 Hz forever and never starts
 audio.
 
 ### Host unit tests
@@ -947,11 +1084,12 @@ audio.
 make test
 ```
 
-Builds eight host executables into `build/terrarium/` with `HOSTCC`/`HOSTCXX` (`Makefile:110-154`) and runs them;
+Builds ten host executables into `build/terrarium/` with `HOSTCC`/`HOSTCXX` (`Makefile:111-165`) and runs them;
 no ARM toolchain or firmware build is involved. Each prints `<suite>: N checks, 0 failed` and
 exits non-zero on any failed `CHECK()` ([tests/check.h](tests/check.h)):
 - `knob_bank_test` - `KnobBank` parking, move threshold, 50-block takeover glide, apply
-  epsilon, rails, bank change, reset mid-glide
+  epsilon, rails, bank change, reset mid-glide, and `Repark()` (an external MIDI write parks one
+  knob while the others stay live)
 - `toggle_bank_test` - `ToggleBank` parking on first scan / bank change / `forceReset`, and
   immediate writes after a flip, including three-position values
 - `footswitch_gestures_test` - `FootswitchGestures` driven through a model of libdaisy's 8-bit
@@ -972,15 +1110,20 @@ exits non-zero on any failed `CHECK()` ([tests/check.h](tests/check.h)):
 - `engine_alloc_test` - the whole CloudSeed library compiled for the host, with counting
   replacements for `operator new` and `custom_pool_allocate`: after boot, every parameter is
   swept 0 → 0.25 → 0.5 → 0.75 → 1 → 0.5 through `SetParameter()` with a `Process()` block after each write, and
-  must cause zero heap and zero pool allocations (see "Performance Architecture")
-- `preset_protocol_test tests/fixtures/two_presets.toml` - `SysExAssembler` framing (split
-  frames, real-time bytes, overflow, aborted, empty and restarted frames, and a burst of other
-  devices' frames that must not hide ours), `PackSysExUsbMidi()`
+  must cause zero heap and zero pool allocations (see "Performance Architecture"); built with
+  `-Werror=double-promotion`, so no engine header may promote float to double
+- `allpass_clear_test` - `ModulatedAllpass`'s constant-time `ClearBuffers()`: after noise and a
+  clear, the output must equal an allpass with a truly zeroed ring, sample for sample, past
+  the point where the ring is rewritten (modulation off, on with and without interpolation)
+- `preset_protocol_test tests/fixtures/two_presets.toml` - `MidiInQueue` framing (split
+  frames, real-time bytes, overflow, aborted, empty and restarted frames, a burst of other
+  devices' frames that must not hide ours, channel messages with running status popped in
+  arrival order between SysEx frames, a full ring dropping whole messages), `PackSysExUsbMidi()`
   CIN/padding, and the `PresetProtocol` state machine: INFO fields, BEGIN length checks and
   restart, chunked upload + COMMIT including a full 98,304-byte upload and an overrun at that
   size, duplicate/gapped/wrapped sequence numbers, length/hash mismatches (hash bits 28-31
   included), `ParseError` and `FlashError` replies, READ chunking, the 5 s session timeout,
-  ABORT, REVERT, DFU, the Identity Reply (any device id, board member byte, build id fallback/truncation/
+  ABORT, REVERT, DFU, DUMP (Ok with no body, not a session message), the Identity Reply (any device id, board member byte, build id fallback/truncation/
   sanitising, session timer untouched), and foreign/unknown SysEx. Every reply is checked to be
   one well-formed 7-bit SysEx message. An end-to-end case uploads the fixture through USB-MIDI packets and the
   real parser, and checks that a rejected bank's COMMIT reply carries the parser's own message
@@ -988,6 +1131,13 @@ exits non-zero on any failed `CHECK()` ([tests/check.h](tests/check.h)):
   image, corrupted text or hash, and the 1..`kMaxTextBytes` length bounds
 - `cpu_load_test` - `CpuLoadWindow`: nothing published before a window completes, mean /
   longest block and overruns per window, a fresh start each window, saturation
+- `midi_control_test` - `kMidiControls` integrity (54 unique numbers, `MidiControlIndex()`
+  round trip, targets), `MidiInDecoder` (CC, per-channel NRPN selection and data entry, RPN
+  deselect, ignored messages, Program Change), `NormFromCc()` / `NormFromQ14()` exactness,
+  `DelayLinesFromNorm()` boundaries for both boards (HotHouse NRPN 4095/4096 and 12287/12288),
+  `MidiReporter` (full report after `Invalidate()`, PC first, change-only CC / NRPN, a short
+  buffer resuming on the next call) and `ControlMailbox` (latest value wins, bounded round-robin
+  drain, `Clear()`)
 
 The browser editor has its own `bun:test` suite, which `make test` does not run:
 `make -C editor test` (App, FlowPanel, Fader, flow, state, bank, scale, client, protocol);
@@ -1021,7 +1171,7 @@ Located in `build/<board>/` (`build/terrarium/` or `build/hothouse/`):
 Located in `build/`:
 - **build_id.c** - the generated build id (shared by both boards)
 - **release/cloudseed-terrarium.bin**, **release/cloudseed-hothouse.bin** - `make release`
-  (`Makefile:184-194`) runs `make BOARD=terrarium` then `make BOARD=hothouse` (one after the
+  (`Makefile:190-199`) runs `make BOARD=terrarium` then `make BOARD=hothouse` (one after the
   other: they share `build/build_id.c` and the CloudSeed sub-make) and copies each board's
   `cloudseed.bin` here under a board-specific name, for GitHub release assets
 - **editor.html** - the browser editor as one stand-alone file (`make editor-html`: runs
@@ -1064,10 +1214,10 @@ A Seed running other firmware needs BOOT/RESET (or that firmware's own DFU comma
 
 **Platform**: ARM GCC (`arm-none-eabi-gcc`)
 **CPU**: Cortex-M7 (`-mcpu=cortex-m7`, `CloudSeed/Makefile:70`)
-**Optimization**: `-O3` (`Makefile:51`, `CloudSeed/Makefile:20`)
+**Optimization**: `-O3` (`Makefile:52`, `CloudSeed/Makefile:20`)
 **FPU**: Hard float (`-mfpu=fpv5-d16 -mfloat-abi=hard`, `CloudSeed/Makefile:73-76`)
 **Language**: C++14 (`-std=gnu++14`, `CloudSeed/Makefile:67`)
-**Float flags**: `-ffast-math` on both the app (`Makefile:74`) and the library
+**Float flags**: `-ffast-math` on both the app (`Makefile:75`) and the library
 (`CloudSeed/Makefile:106`); the library additionally uses `-fno-exceptions`,
 `-finline-functions`, and `-fno-aggressive-loop-optimizations` (`CloudSeed/Makefile:104-108`)
 **App type**: `BOOT_SRAM` (`Makefile:6`)
@@ -1097,7 +1247,7 @@ resolved map with `./build/terrarium/preset_check --print-knob-map presets.toml`
 knob6_b = "input.LowPass"
 ```
 
-`applyKnobTarget()` (`src/cloudseed.cpp:224-257`) turns `LowPassEnabled` on the first time that
+`applyKnobTarget()` (`src/cloudseed.cpp:250-277`) turns `LowPassEnabled` on the first time that
 knob is moved, so the filter is audible even in presets that ship with it off; the takeover
 glide starts from the open filter (`knobTargetValue()`), so enabling it does not step the tone.
 `HighPass` gets the same treatment via `HiPassEnabled`; no other gated parameter does - for the
@@ -1106,15 +1256,16 @@ shelves, the in-loop cutoff, and the diffusers, set the matching `*Enabled` valu
 below), in which case
 `applyKnobTarget()` leaves the enable alone and the knob only moves the cutoff.
 
-`applyKnobTarget()` is also where the output-level cache is invalidated: its `switch` sets
+`setParameter()` (`src/cloudseed.cpp:241-247`), which every knob, toggle and MIDI parameter
+write goes through, is where the output-level cache is invalidated: it sets
 `state.outputLevelsDirty` for `DryOut`/`EarlyOut`/`MainOut`. Any new code path that writes one
-of those three parameters outside `loadPreset()` must set that flag, or the makeup gain and the
-dry-cancellation scale will stay at their old values.
+of those three parameters outside `loadPreset()` must use it (or set that flag), or the makeup
+gain and the dry-cancellation scale will stay at their old values.
 
 **Adding a non-parameter knob target** (like `reverse.delay`) requires C++: a new
 `KnobTargetKind` in [src/preset_bank.h](src/preset_bank.h), a branch in `parseKnobTarget()`
 ([src/preset_bank.cpp](src/preset_bank.cpp)), and a branch in `applyKnobTarget()`
-(`src/cloudseed.cpp:224-257`), plus the matching branch in `parseKnobTarget()` in
+(`src/cloudseed.cpp:250-277`), plus the matching branch in `parseKnobTarget()` in
 editor/src/model/bank.ts and the `KNOB_TARGETS` entry in editor/src/model/schema.ts.
 
 **Example**: reassign SWITCH_2 (Bloom by default; HotHouse: toggle2) to enable the late low-pass instead - edit
@@ -1142,26 +1293,35 @@ rejected with `'Name' is not an on/off parameter`: a lever would slam it to 0 or
 `ToggleTargetKind` in [src/preset_bank.h](src/preset_bank.h) (after
 `ToggleTarget_DelayLinesSelect` if it is three-way, so `IsThreeWayToggleTarget()` holds), a
 branch in `parseToggleTarget()` ([src/preset_bank.cpp](src/preset_bank.cpp)), and a branch in
-`applyToggleTarget()` (`src/cloudseed.cpp:263-290`), plus `parseToggleTarget()` in
+`applyToggleTarget()` (`src/cloudseed.cpp:283-310`), plus `parseToggleTarget()` in
 editor/src/model/bank.ts and `TOGGLE_TARGETS` in editor/src/model/schema.ts.
+
+**A new engine parameter or stored pseudo-value** must also get a MIDI control (docs/MIDI.md):
+a row in `kMidiControls` ([src/midi_control.cpp](src/midi_control.cpp); bump
+`kMidiControlCount`, pick a free number from the unused ranges, keep the table order) with its
+`MidiTarget`, the matching handling in `applyMidiWrites()` / `controlValue()` in
+src/cloudseed.cpp for a new non-Param target, the same row at the same position in
+`MIDI_CONTROLS` (editor/src/midi/control.ts), and the row in docs/MIDI.md section 5.
+`midi_control_test` fails when a `Parameter` other than `LineCount` has no row; the editor's
+`control.test.ts` fails when a `PARAM_KEYS` key has no number.
 
 ### 2. Modifying Parameter Ranges
 
-Knobs are read raw: `hw.knob[i].Value()` (`src/cloudseed.cpp:478-480`) yields 0.0-1.0
+Knobs are read raw: `hw.knob[i].Value()` (`src/cloudseed.cpp:545-547`) yields 0.0-1.0
 and is handed straight to `SetParameter`, which applies the engine's own scaling
 (`ReverbController::GetScaledParameter`). There is no per-knob min/max any more - the six
 `::daisy::Parameter` wrappers were removed when knob targets became data.
 
-To restrict a knob's travel, scale in `applyKnobTarget()` (`src/cloudseed.cpp:224-257`) before the
+To restrict a knob's travel, scale in `applyKnobTarget()` (`src/cloudseed.cpp:250-277`) before the
 `SetParameter` call, e.g. `value = 0.5f + 0.5f * value;` for the upper half of the range, **and**
-apply the inverse for that parameter in `knobTargetValue()` (`src/cloudseed.cpp:295-316`), e.g.
+apply the inverse for that parameter in `knobTargetValue()` (`src/cloudseed.cpp:315-336`), e.g.
 `(v - 0.5f) / 0.5f` clamped to 0..1. The takeover glide runs in knob space from
 `knobTargetValue()` to the pot, so without the inverse its first step writes `0.5 + 0.5 * stored`
 instead of `stored` - a jump. A stored value outside the knob's range still jumps to the nearest
 end of that range on the first write. Both changes affect every preset that maps a knob to that
 parameter.
 
-The knob response constants: `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:49`, the ADC one-pole), and in
+The knob response constants: `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:50`, the ADC one-pole), and in
 [src/knob_bank.h](src/knob_bank.h) `kKnobMoveThreshold` (how far a parked knob must move to take over),
 `kKnobApplyEpsilon` (the smallest change a live knob re-writes), `kKnobRailWindow` (how close to a
 stop reads as exactly 0.0 / 1.0), and `kKnobGlideBlocks` (takeover glide length in 1 ms blocks;
@@ -1323,8 +1483,8 @@ constexpr int TotalLineCount = 5;  // CloudSeed/DelayLineCount.h:14
 `TotalLineCount` is the single definition of how many `DelayLine`s `ReverbChannel` builds, and
 everything that depends on it follows automatically:
 - `ReverbChannel::SetParameter(LineCount)` clamps the active count to 1..`TotalLineCount`
-  (`CloudSeed/ReverbChannel.h:221-231`), so no caller can make `Process` loop past the lines that
-  exist (`:411`, `:414`). The lower bound matters too: `ReverbController::LoadPreset()` re-applies
+  (`CloudSeed/ReverbChannel.h:165-175`), so no caller can make `Process` loop past the lines that
+  exist (`:339`, `:343`). The lower bound matters too: `ReverbController::LoadPreset()` re-applies
   the stored `LineCount`, which is 0 at boot until the audio callback sets the real count
 - `readLineCount()` (`src/preset_bank.cpp:198-214`) validates `default_delay_lines` /
   `max_delay_lines` against it, so `make` rejects a preset asking for more lines than exist,
@@ -1346,8 +1506,8 @@ memory and CPU per line ("Through the Looking Glass" already crackles above 4).
 reassigning a switch (see "1. Changing Control Mappings" above); [src/board.h](src/board.h) for
 the pins (`kSwitchPinTable`) and `PedalBoard::TogglePosition()`;
 [src/cloudseed.cpp](src/cloudseed.cpp) for the mechanism itself
-(`src/cloudseed.cpp:361-402` for `updateEngineControls()`, which scans and dispatches both knobs and
-toggles; `src/cloudseed.cpp:263-290` for `applyToggleTarget()`; `src/cloudseed.cpp:504-512` for
+(`src/cloudseed.cpp:423-464` for `updateEngineControls()`, which scans and dispatches both knobs and
+toggles; `src/cloudseed.cpp:283-310` for `applyToggleTarget()`; `src/cloudseed.cpp:571-577` for
 `reverse.enabled`/`reverse.direct_mix` in the callback)
 
 Every switch's function is data, resolved per preset by `[preset.toggle_map]`. The Terrarium
@@ -1367,16 +1527,16 @@ To change what a switch does without touching the banks (e.g. a completely diffe
 for every preset, or another pseudo-target), add a case to `ToggleTargetKind`
 ([src/preset_bank.h](src/preset_bank.h)), a branch in `parseToggleTarget()`
 ([src/preset_bank.cpp](src/preset_bank.cpp)), and a branch in `applyToggleTarget()`
-(`src/cloudseed.cpp:263-290`), plus the editor's `parseToggleTarget()` / `TOGGLE_TARGETS`; see
+(`src/cloudseed.cpp:283-310`), plus the editor's `parseToggleTarget()` / `TOGGLE_TARGETS`; see
 "1. Changing Control Mappings" above.
 
-Toggles are read with `hw.TogglePosition(i)` (`src/cloudseed.cpp:483-484`), which returns
+Toggles are read with `hw.TogglePosition(i)` (`src/cloudseed.cpp:550-551`), which returns
 `kToggleDown` / `kToggleMiddle` / `kToggleUp` from the debounced `Switch::Pressed()` of the
 toggle's pin(s) (a grounded pin is pressed).
 
 ### 6. Adjusting Audio Buffer Size
 
-**File**: [src/cloudseed.cpp](src/cloudseed.cpp) (`src/cloudseed.cpp:602`, `:663-682`)
+**File**: [src/cloudseed.cpp](src/cloudseed.cpp) (`src/cloudseed.cpp:741`, `:802-821`)
 
 ```cpp
 // Current: 48 samples per block
@@ -1386,23 +1546,23 @@ hw.StartAudio(audioCallback);
 ```
 
 Two sizes are coupled and must change together:
-- `AUDIO_BUFFER_SIZE` (`src/cloudseed.cpp:30`) is also the hardware block size:
-  `hw.Init(AUDIO_BUFFER_SIZE)` (`src/cloudseed.cpp:602`) sets it in `PedalBoard::Init()` before
+- `AUDIO_BUFFER_SIZE` (`src/cloudseed.cpp:31`) is also the hardware block size:
+  `hw.Init(AUDIO_BUFFER_SIZE)` (`src/cloudseed.cpp:741`) sets it in `PedalBoard::Init()` before
   the knobs are initialised, so their one-poles run at the real callback rate (see "ADC
   smoothing"). It sizes the file-scope `gInputBuffer`, `gWetBuffer`,
-  `gReverseBuffer` and `gReverbInputBuffer` (`src/cloudseed.cpp:324-327`) and every callback loop;
-  `main()` stops in `FatalErrorLoop()` if `hw.AudioBlockSize()` differs (`src/cloudseed.cpp:609-610`)
-- `ReverbController::bufferSize` (`CloudSeed/ReverbController.h:23`) sizes the controller's
-  fixed member arrays
+  `gReverseBuffer` and `gReverbInputBuffer` (`src/cloudseed.cpp:344-347`) and every callback loop;
+  `main()` stops in `FatalErrorLoop()` if `hw.AudioBlockSize()` differs (`src/cloudseed.cpp:748-749`)
+- `ReverbController::bufferSize` (`CloudSeed/ReverbController.h:18`) sizes the engine's
+  block buffers (`ReverbChannel`, `DelayLine`, the diffusers' outputs)
 
-Raising `AUDIO_BUFFER_SIZE` but not `bufferSize` overruns the controller's arrays.
+Raising `AUDIO_BUFFER_SIZE` but not `bufferSize` overruns the engine's block buffers.
 Smaller blocks = lower latency, higher CPU load; larger blocks = higher latency, lower CPU load.
 
 These are counted in callbacks and assume the 1 ms block (48 samples at 48 kHz); rescale them
 with the block period:
 - `kKnobGlideBlocks` (`src/knob_bank.h:27`): 50 blocks = the 50 ms takeover glide
 - `kLongHoldBlocks` (`src/footswitch_gestures.h:24`): 5000 blocks = the 5 s save / restore holds
-- `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:49`): a per-callback one-pole coefficient, ~20 ms
+- `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:50`): a per-callback one-pole coefficient, ~20 ms
   at 1 kHz
 - libdaisy's `Switch::Debounce()` shifts at most once per ms (`libdaisy/src/hid/switch.cpp:34`):
   with longer blocks it shifts once per block, so the 8-shift press latch and 7-shift release
@@ -1488,56 +1648,61 @@ per-call lookup function. Both functions only `Set()` LED2; the audio callback's
 
 ### Understanding Audio Flow
 
-**CloudSeed Audio Callback** (`audioCallback()` at `src/cloudseed.cpp:520-526` - runs once per
+**CloudSeed Audio Callback** (`audioCallback()` at `src/cloudseed.cpp:585-591` - runs once per
 48-sample block, i.e. at 1 kHz): it reads `System::GetTick()`, runs `processBlock()`
-(`src/cloudseed.cpp:463-517`), and hands the elapsed ticks to `gCpuLoad.AddBlock()`
+(`src/cloudseed.cpp:525-582`), and hands the elapsed ticks to `gCpuLoad.AddBlock()`
 (`CpuLoadWindow`, [src/cpu_load.h](src/cpu_load.h)), which publishes the average and peak
 block load in permille plus the overrun count once per second for the protocol's `LOAD`
 reply. The steps below all run in `processBlock()`:
-1. Process analog/digital controls and push both LEDs with `UpdateLeds()` (`:464-466`, two `Led::Update()` calls). Once
+1. Process analog/digital controls and push both LEDs with `UpdateLeds()` (`:526-528`, two `Led::Update()` calls). Once
    audio runs this is the only caller of `Update()`: it is a read-modify-write that would race
    with the main loop
-2. `processFootswitches()` (`:329-354`): one `gFootswitches.Update()` call with both switches'
+2. `processFootswitches()` (`:349-374`): one `gFootswitches.Update()` call with both switches'
    `Pressed()` / `FallingEdge()` returns `FootswitchEvents`. `toggleBypass` flips
    `state.bypass` and sets LED1 (the main loop persists it later), `cyclePreset` sets
    `triggerPresetChange`, `savePreset` sets `gSaveRequested`, `restorePreset` sets
    `triggerPresetRestore`
 3. Read `state.bypass` once. While `state.presetChangeInProgress` **or** `state.uploadActive`
    is set - the main loop is rewriting `state.knobMap` / `state.toggleMap` and every engine
-   parameter, or a USB upload session owns the reverb (`serviceUsbPresetLink()`, below) - the
-   block copies the input to both outputs and returns (`:472-476`): no knob/toggle scan, no
-   reverb, `reverseMix` does not advance
-4. Read all six knobs with `hw.knob[i].Value()` (`:478-480`) and the board's `kBoardToggles`
-   toggles with `hw.TogglePosition(i)` (`:481-484`; slots past the board's count stay Down) and call
-   `updateEngineControls(gFootswitches.PresetHeld() ? 1 : 0, knobPositions, togglePositions)`
-   (`:486-487`, body `:361-402`), which holds every reverb write:
+   parameter, or a USB upload session owns the reverb (`serviceUsbMidi()`, below) - the
+   block copies the input to both outputs and returns (`:534-538`): no MIDI write, no knob/toggle
+   scan, no reverb, `reverseMix` does not advance
+4. Compute the bank once, `gFootswitches.PresetHeld() ? 1 : 0` (`:541`), and call
+   `applyMidiWrites(bank)` (`:543`, body `:381-416`): drain at most 8 MIDI control writes from
+   `gMidiMailbox` and re-park the knobs mapped to their targets (see "MIDI live control"); it
+   runs before the knob read so a knob it re-parks is parked in this block's scan
+5. Read all six knobs with `hw.knob[i].Value()` (`:545-547`) and the board's `kBoardToggles`
+   toggles with `hw.TogglePosition(i)` (`:549-551`; slots past the board's count stay Down) and call
+   `updateEngineControls(bank, knobPositions, togglePositions)`
+   (`:552`, body `:423-464`), which holds every knob and toggle write:
    - read every knob's current target value for the active bank with `knobTargetValue()`, then
-     one `gKnobs.Scan(bank, reset, …)` call (`:366-373`) re-parks on any bank or preset
+     one `gKnobs.Scan(bank, reset, …)` call (`:428-435`) re-parks on any bank or preset
      transition (zero writes that block) and otherwise returns the knobs to write: glide steps
      for a knob taking over, then the knob's own position; `reset` is
-     `state.controlResetPending`, read once and shared with the toggle scan (`:370`)
+     `state.controlResetPending`, read once and shared with the toggle scan (`:432`)
    - dispatch each returned write through `applyKnobTarget()` using `state.knobMap[bank][i]` —
-     the cached copy, never `gPresets` (`:374-375`)
-   - one `gToggles.Scan(bank, reset, togglePositions, …)` call (`:379-381`) re-parks the same
+     the cached copy, never `gPresets` (`:436-437`)
+   - one `gToggles.Scan(bank, reset, togglePositions, …)` call (`:442`) re-parks the same
      way (`toggle_bank.h`), then returns the levers to write: a moved lever writes its
      position (Down / Middle / Up) immediately, no glide; dispatch each through `applyToggleTarget()`
-     using `state.toggleMap[bank][i]` (`:382-384`)
+     using `state.toggleMap[bank][i]` (`:444-446`)
    - any knob or toggle write while in bank 1 calls `gFootswitches.MarkEdited()`, cancelling
-     that hold's preset change (`:389-390`)
+     that hold's preset change (`:451-452`)
    - select the delay line count from `state.delayLines` (`DelayLines_One` = 1, `_Default` =
      `state.defaultDelayLines`, `_Max` = `state.maxDelayLines`; set by the delay-line toggle
      target, applied above if it just moved) and write `Parameter::LineCount` when it differs from
-     `state.prevNumDelayLines` (`:395-401`). All candidates are exact, so the `!=` test
+     `state.prevNumDelayLines` (`:457-463`). All candidates are exact, so the `!=` test
      is exact; a preset with different default/max counts is re-applied on the first callback
      after the change
    Then, if `gSaveRequested` is set and the previous snapshot has been consumed, copy
    `GetAllParameters()`, `state.reverseDelayNorm`, `0.5 * state.delayLines` and the two reverse
-   pseudo-values into `gSaveSnapshot` and publish it with `state.saveSnapshotReady` (`:491-501`). This runs only
+   pseudo-values into `gSaveSnapshot` and publish it with `state.saveSnapshotReady` (`:556-566`). This runs only
    past the preset-change gate, so a half-loaded preset is never captured
-5. `refreshOutputLevels()` (`:502`, body `:406-421`): `makeupGain` and `scaledDryOut` are
+6. `refreshOutputLevels()` (`:567`, body `:468-483`): `makeupGain` and `scaledDryOut` are
    **not** recomputed per block: they depend only on `DryOut`/`EarlyOut`/`MainOut`, so they are
    derived into `state.makeupGain` / `state.scaledDryOut` only when `state.outputLevelsDirty` is
-   set, and the output stage just reads them. The flag is set by `applyKnobTarget()` on a write
+   set, and the output stage just reads them. The flag is set by `setParameter()` (`:241-247`,
+   used by knob, toggle and MIDI writes) on a write
    to any of those three parameters and by `loadPreset()`. The dry/wet mix itself happens inside
    the reverb; `processBlock()` only scales the result by
    `makeupGain = OUTPUT_VOLUME_BOOST * (1 + sinf(wetBalance * HALF_PI) * MAKEUP_GAIN_STRENGTH)`,
@@ -1545,62 +1710,67 @@ reply. The steps below all run in `processBlock()`:
    `HALF_PI` is a `float` constant, so no double-precision math is emitted. Those three levels
    are read from `reverb->GetAllParameters()`, not from knob positions - with
    `[preset.knob_map]` a knob need not be mapped to any of them
-6. `state.reverseEnabled` (the `"reverse.enabled"` toggle target) becomes `reverseTarget` (0 or
-   1), and the left input channel is copied into `gInputBuffer` (`:506-507`)
-7. `state.reverseDirectMix` (the `"reverse.direct_mix"` toggle target) picks the render helper
-   (`:509-512`), each of which writes `out[0]` scaled by `makeupGain`:
-   - Into-reverb, `reverseDirectMix` off, `renderReverseIntoReverb()` (`:428-445`): reverse the
+7. `state.reverseEnabled` (the `"reverse.enabled"` toggle target) becomes `reverseTarget` (0 or
+   1), and the left input channel is copied into `gInputBuffer` (`:571-572`)
+8. `state.reverseDirectMix` (the `"reverse.direct_mix"` toggle target) picks the render helper
+   (`:574-577`), each of which writes `out[0]` scaled by `makeupGain`:
+   - Into-reverb, `reverseDirectMix` off, `renderReverseIntoReverb()` (`:490-507`): reverse the
      dry input into `gReverseBuffer`, scale it to the injected reverse, add that to the reverb
      input (`gReverbInputBuffer`), run `reverb->Process(gReverbInputBuffer, gWetBuffer, …)`,
      then `out = (wet − scaledDryOut * injectedReverse) * makeupGain`; subtracting
      `scaledDryOut * injectedReverse` cancels the reverb's dry pass-through of the injected
      reverse, so the forward dry stays clean and the reverse is heard only through the wet tail
-   - Direct-mix, `reverseDirectMix` on, `renderReverseDirect()` (`:449-460`):
+   - Direct-mix, `reverseDirectMix` on, `renderReverseDirect()` (`:511-522`):
      `reverb->Process(gInputBuffer, gWetBuffer, …)`, record the reverb output into
      `reverseDelay` for backward playback, then
      `out = (wet + reversed * REVERSE_LEVEL * mix) * makeupGain`, the reverse audible on its own
    Both ramp the reverse via a smoothed mix toward `reverseTarget`, kept in a local during the
    sample loop and stored back to `state.reverseMix` afterwards, so the `"reverse.enabled"`
    toggle switches click-free (engine in `CloudSeed/ReverseDelay.h`)
-8. If bypassed, overwrite `out[0]` with the input (`src/cloudseed.cpp:513-514`)
-9. Mono: copy `out[0]` to `out[1]` (`src/cloudseed.cpp:516`), so both output jacks carry the
+9. If bypassed, overwrite `out[0]` with the input (`src/cloudseed.cpp:578-579`)
+10. Mono: copy `out[0]` to `out[1]` (`src/cloudseed.cpp:581`), so both output jacks carry the
    same signal in every path
 
 When `state.bypass` is set, output is a straight copy of the input — but the reverb (and the
 reverse mix) is still processed, deliberately, to suppress an audible 1 kHz whine (the
-`reverb->Process()` call inside whichever render helper runs, `src/cloudseed.cpp:428-460`). When
+`reverb->Process()` call inside whichever render helper runs, `src/cloudseed.cpp:490-522`). When
 `state.presetChangeInProgress` or `state.uploadActive` is set, the reverb is skipped entirely and
-the input is passed through to both outputs (`src/cloudseed.cpp:472-476`).
+the input is passed through to both outputs (`src/cloudseed.cpp:534-538`).
 
-**CloudSeed Main Loop** (`main()` while loop at `src/cloudseed.cpp:684-723` - free-running, no sleep):
-1. **Save / restore** (`:687-701`): a published `gSaveSnapshot` is copied into the current
+**CloudSeed Main Loop** (`main()` while loop at `src/cloudseed.cpp:823-862` - free-running, no sleep):
+1. **Save / restore** (`:826-840`): a published `gSaveSnapshot` is copied into the current
    preset's `UserPreset` slot (`gStorage.UserSlot()`) and written with `gStorage.SaveUserPresets()`; a restore clears the
    slot, reloads the preset with `loadPresetGated()`, and saves. Both start the confirmation
    blink. See "User preset save / factory restore"
-2. **Handle preset changes** (`:707-711`): clear `triggerPresetChange`, then
-   `loadPresetGated(next)` (`:211-221`) sets `presetChangeInProgress` and
+2. **Handle preset changes** (`:846-849`): clear `triggerPresetChange`, then
+   `selectPreset(next)` (`:235-238`): `loadPresetGated(next)` (`:220-232`) sets
+   `presetChangeInProgress` and
    `state.controlResetPending` (so the knob and toggle positions are re-snapshotted before the
    new preset loads), and between two `std::atomic_signal_fence(std::memory_order_seq_cst)`
-   compiler barriers updates `state.currentPreset` and runs `loadPreset()`, then clears the flag
-   to re-enable audio processing; `StartPresetBlink(state.blinkPattern)` follows.
+   compiler barriers clears the MIDI mailbox, updates `state.currentPreset`, runs `loadPreset()`
+   and invalidates the MIDI reporter, then clears the flag
+   to re-enable audio processing; `StartPresetBlink(state.blinkPattern)` follows. A MIDI
+   Program Change takes the same `selectPreset()` path from step 3.
    `loadPreset()` is synchronous, so there is no delay: the gate reopens as soon as it returns.
    The seven flags shared with the callback (`bypass`, `triggerPresetChange`,
    `triggerPresetRestore`, `saveSnapshotReady`, `presetChangeInProgress`, `uploadActive`,
-   `controlResetPending`) are `volatile bool` (`:67-73`)
-3. **USB preset upload/read/revert/DFU/LOAD**: `serviceUsbPresetLink()` (`:714`, body `:550-598`)
-   first hands `gCpuLoad.Published()` and `state.currentPreset` to the protocol
-   (`gPresetProtocol.SetLoad()` / `SetCurrentPreset()`, `:552-553`), so `LOAD` and `INFO` answer
-   with the last completed one-second window and the preset playing, then answers
-   one received SysEx frame per pass (`UsbMidiLink` / `PresetProtocol`, see "USB-MIDI preset
-   upload" above), performs the blocking QSPI write on COMMIT or the erase on REVERT, and keeps
+   `controlResetPending`) are `volatile bool` (`:68-74`)
+3. **USB-MIDI** (preset protocol and live control): `serviceUsbMidi()` (`:853`, body `:705-737`)
+   hands `gCpuLoad.Published()` to the protocol (`SetLoad()`), then handles up to 64 received
+   messages in arrival order: channel messages through `handleChannelMessage()` (CC / NRPN into
+   the mailbox, Engage, Program Change via `selectPreset()`), SysEx frames through
+   `handleSysEx()` (`SetCurrentPreset()`, `PresetProtocol::Handle()`, the blocking QSPI write on
+   COMMIT or the erase on REVERT, DUMP's full state report, the reply). It keeps
    `state.uploadActive` in step with the session so the callback's passthrough gate opens and
-   closes with it. A successful COMMIT or REVERT - and a COMMIT that fails after already
+   closes with it, runs `reportControls()` every 10 ms, and `Flush()`es the send queue. A
+   successful COMMIT or REVERT - and a COMMIT that fails after already
    erasing the bank the pedal is running - reboots via `NVIC_SystemReset()`; DFU resets into the
-   bootloader via `System::ResetToBootloader()`
-4. **Persist settings**: `gStorage.ServiceSettingsSave()` (`:716`) - the coalesced flash write described
+   bootloader via `System::ResetToBootloader()` (see "USB-MIDI preset upload" above)
+4. **Persist settings**: `gStorage.ServiceSettingsSave()` (`:855`) - the coalesced flash write described
    under Preset Persistence
-5. **Update LEDs**: `ServiceConfirmBlink()`, else `ServicePresetBlink()` (`:719-720`)
-6. `keepCoreBusy()` (`:722`, defined at `:536-545`) — deliberate busy work that keeps the core
+5. **Update LEDs**: `ServiceConfirmBlink()`, else `ServicePresetBlink()` (`:858-859`)
+6. `if (kKeepCoreBusy) keepCoreBusy();` (`:861`, defined at `:601-610`; Terrarium only:
+   `kKeepCoreBusy` in `src/board.h`, the HotHouse image has none) — deliberate busy work that keeps the core
    out of idle between callbacks and reduces an audible 1 kHz whine: it advances a `volatile`
    phase by 0.001 (wrapped at `TWO_PI`) and stores `sinf(phase)` to a `volatile` sink, so every
    pass performs a real FPU `sinf()` plus real loads and stores (a constant argument would be
@@ -1608,11 +1778,12 @@ the input is passed through to both outputs (`src/cloudseed.cpp:472-476`).
 
 **Performance Architecture**:
 - **Audio callback**: Time-critical, optimized for low latency
-  - Control scanning (knobs, toggles, footswitch gestures), engine parameter writes, and audio
-    processing
+  - Control scanning (knobs, toggles, footswitch gestures), MIDI control writes from the
+    mailbox (at most `ControlMailbox::kMaxDrainPerBlock` = 8 per block, so a burst cannot
+    stretch a block), engine parameter writes, and audio processing
   - Sets trigger flags for heavy operations
   - No flash writes or preset loading
-  - **Allocation-free**: every knob or toggle write goes through `ReverbChannel::SetParameter`
+  - **Allocation-free**: every knob, toggle or MIDI write goes through `ReverbChannel::SetParameter`
     inside the audio interrupt, so no parameter update may touch the heap or the SDRAM pool;
     `make test` enforces this (`tests/engine_alloc_test.cpp`). The seed-derived values every
     stage draws its delays, gains and modulation from live in fixed-size
@@ -1624,17 +1795,19 @@ the input is passed through to both outputs (`src/cloudseed.cpp:472-476`).
     `LineModAmount`/`LineModRate`) is therefore bounded arithmetic - see
     [docs/PERFORMANCE.md](docs/PERFORMANCE.md) §9
   - The USB-MIDI receive path shares this: the ISR (priority 0, same as the audio DMA) does
-    nothing but `SysExAssembler::Feed()`; everything else about an upload runs in the main loop
+    nothing but `MidiInQueue::Feed()`; everything else about an upload or a MIDI message runs
+    in the main loop
 - **Main loop**: Non-critical background tasks
   - Preset switching (includes buffer clearing)
   - Flash memory writes (settings, user preset save/restore)
-  - USB preset link service (`serviceUsbPresetLink()`): services one SysEx frame per pass, and
+  - USB-MIDI service (`serviceUsbMidi()`): up to 64 received messages per pass (live control
+    and SysEx), the 10 ms state report and the non-blocking send queue; it
     performs the COMMIT validation parse and QSPI write (blocking; hosts allow up to 10 s for
     the reply) while the callback's passthrough gate is held closed, and the REVERT one-sector
     erase (REVERT needs no session, so the gate is normally open during it)
   - LED blink state machine and save/restore confirmation blink
 - **FPU flush-to-zero** is enabled once at the top of `main()` before `hw.Init()`
-  (`src/cloudseed.cpp:601`) — see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) §1
+  (`src/cloudseed.cpp:740`) — see [docs/PERFORMANCE.md](docs/PERFORMANCE.md) §1
 
 This separation prevents audio glitches during preset changes, flash writes, and USB uploads.
 
@@ -1669,14 +1842,14 @@ gLed2.Set(parameter_value);  // 0.0-1.0
 ```
 
 `Set()` is enough once audio runs: the audio callback calls `Led::Update()` for both LEDs every
-block (`src/cloudseed.cpp:466`), and nothing else may call it after `hw.StartAudio()` (it is a
+block (`src/cloudseed.cpp:528`), and nothing else may call it after `hw.StartAudio()` (it is a
 read-modify-write that races with the callback). Only before `StartAudio()` must you call
 `UpdateLeds()` yourself.
 
 Caveat: `ServicePresetBlink()` (`src/pedal_leds.cpp:67-113`) runs on every main-loop pass and sets
 LED2 at each blink transition (and turns it off while bypassed), so it overwrites debug values
 unless that call is removed. LED1 is likewise re-set on every
-bypass toggle (`src/cloudseed.cpp:339`), and both LEDs are driven by the save/restore confirmation
+bypass toggle (`src/cloudseed.cpp:359`), and both LEDs are driven by the save/restore confirmation
 blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
 
 ### Common Issues
@@ -1700,7 +1873,7 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
 
 **Control Issues**:
 - Verify the knob/switch pins in `src/board.h` for the board you built (`make` vs `make BOARD=hothouse`)
-- Check the knob smoothing coefficient (`KNOB_SMOOTHING_COEFF`, `src/cloudseed.cpp:49`) and the
+- Check the knob smoothing coefficient (`KNOB_SMOOTHING_COEFF`, `src/cloudseed.cpp:50`) and the
   takeover constants in [src/knob_bank.h](src/knob_bank.h): a knob brushed by accident taking over its
   target means `kKnobMoveThreshold` is too low (raise it to 0.02); a parameter that is re-written
   while nobody touches a live knob means `kKnobApplyEpsilon` is below the ADC noise; a stop that
@@ -1721,8 +1894,10 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
   `MultitapDiffuser::ProcessScatter()`; the static tap path runs otherwise. Unmeasured on hardware
   (see docs/HARDWARE_TESTS.md H15 for the "Through the Looking Glass" check)
 - Measured with the LOAD command (`tools/usb_preset_host.py load`, or the editor's CPU meter):
-  the audio callback averages about 77 % of the 1 ms block (peaks about 88 %) on the HotHouse
-  build running Chorus, 2026-11-08. `audioCallback()` times `processBlock()` with
+  the audio callback averages about 20 % of the 1 ms block (peaks about 27 %) on the HotHouse
+  build running Chorus at its default 2 lines, 2026-11-09 (docs/PERFORMANCE.md §12 has every
+  preset). The heaviest is "Through the Looking Glass" at 4 lines: 59 % avg, 71 % peak.
+  `audioCallback()` times `processBlock()` with
   `System::GetTick()` and feeds `CpuLoadWindow` (`src/cpu_load.h`), which publishes mean,
   longest block and overruns once a second; the main loop hands them to
   `PresetProtocol::SetLoad()`
@@ -1735,22 +1910,22 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
 
 | Region | Terrarium | HotHouse |
 |---|---|---|
-| SRAM (`.text`+`.data`, 480KB `BOOT_SRAM`) | 229,296 B (46.65%) | 229,592 B |
-| DTCMRAM (128KB) | 44,116 B (33.66%) | 44,188 B |
+| SRAM (`.text`+`.data`, 480KB `BOOT_SRAM`) | 230,008 B (46.80%) | 230,056 B |
+| DTCMRAM (128KB) | 53,884 B (41.11%) | 53,948 B |
 | RAM_D2_DMA (32KB) | 17,692 B (53.99%) | 17,692 B |
-| SDRAM (64MB) | 53,138,368 B (79.18%) | 53,138,368 B |
+| SDRAM (64MB) | 51,922,352 B (77.37%) | 51,922,352 B |
 
 - SDRAM is entirely static `DSY_SDRAM_BSS`: `custom_pool`
   50,331,648 B + `reverseDelayBuffer` 768,000 B (192,000 floats = 4 s @ 48 kHz, sized so the
   2000 ms max reverse window clears `ReverseDelay`'s `size / 2` clamp) +
-  `CloudSeed::FastSin::data` 131,072 B + `AudioLib::ValueTables` tables 1,280,032 B (see the
+  `CloudSeed::FastSin::data` 131,072 B + `AudioLib::ValueTables` tables 64,016 B (see the
   `.sdram_bss` section in `build/<board>/cloudseed.map`) + the 512 KB `toml_arena` (not part of
   `custom_pool`; `src/sdram_pool.cpp`, used at boot and to validate USB uploads) + the 96 KiB
   `gUploadText` upload receive buffer + the 5,000 B `gUploadCheck` validation `PresetBank`
   (`src/cloudseed.cpp`)
 - The runtime heap is not in this report: it grows from `end` in RAM_D2
-  (`libdaisy/core/STM32H750IB_sram.lds:239-250`), which is where `DelayLine`'s `tempBuffer`,
-  `mixedBuffer`, and `filterOutputBuffer` (`CloudSeed/DelayLine.h:52-54`) land
+  (`libdaisy/core/STM32H750IB_sram.lds:239-250`), which is where `DelayLine`'s
+  `mixedBuffer` and `filterOutputBuffer` (`CloudSeed/DelayLine.h:49-50`) land
 - SRAM: of that, the embedded bank blob is 50,376 B (Terrarium, `build/terrarium/presets_toml.o`)
   / 50,712 B (HotHouse) - it carries the per-preset `[preset.knob_map]`, `[preset.toggle_map]`,
   `[preset.params.reverse]` and `[preset.params.delay_lines]` tables - tomlc99 is 14,371 B, and
@@ -1760,12 +1935,16 @@ blink (`ServiceConfirmBlink()`, `src/pedal_leds.cpp:124-139`).
   `UserRxBufferHS`/`UserTxBufferHS` ring buffers, `midi_usb_handle` (2,112 B),
   `hpcd_USB_OTG_FS` / `hpcd_USB_OTG_HS` (1,292 B each), the two 732 B `hUsbDeviceFS`/`hUsbDeviceHS`
   descriptors and `USBD_StrDesc` (512 B), plus
-  `gMidiLink` (616 B), `gPresetProtocol` (316 B) and `gCpuLoad` (`CpuLoadWindow`, about 48 B). Also includes the 5,000 B `gPresets` bank
+  `gMidiLink` (9,508 B: the 4 KB `queue_` send queue, the two 512 B `txBuf_` transfer buffers
+  and its `MidiInQueue` with the 4 KB receive ring plus a 256 B SysEx buffer),
+  `gPresetProtocol` (324 B), `gMidiMailbox` (276 B), `gMidiReporter` (220 B), `gMidiDecoder`
+  (64 B) and `gCpuLoad` (`CpuLoadWindow`, 40 B) (`arm-none-eabi-nm -S --size-sort -C
+  build/terrarium/cloudseed.elf`). Also includes the 5,000 B `gPresets` bank
   (40 B of each 312 B preset slot is the knob + toggle maps: 24 B knobs, 16 B toggles), the
   7,116 B `gStorage` (most of it the user-preset `PersistentStorage`, which keeps a
   defaults copy and a live copy of the 3,524 B `UserPresets`), and the 220 B `gSaveSnapshot`.
-  Both regions are smaller than before the HotHouse port (SRAM 234,096 B, DTCMRAM 45,436 B with
-  `DaisyPetal`), despite the larger parameter set
+  MIDI live control added about 9.8 KB of DTCMRAM (from 44,116 B, mostly the link's queues)
+  and about 4.9 KB of SRAM (from 229,296 B)
 - RAM_D2_DMA includes the `MidiUsbTransport` rx/tx buffers
 - QSPI: `Settings` in sector 0 (offset 0), `UserPresets` in sector 1 (offset 0x1000), and the
   uploaded-bank `StoredBankHeader` (offset 0x10000) + text (offset 0x11000), all inside the
@@ -1780,7 +1959,9 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the concrete list of performa
 fixes applied to the CloudSeed DSP (FPU denormal handling, parameter storage, the cached
 per-line gain, hot-loop modulo/precision fixes, placement-new/delete destructor safety, build flags, the redundant
 bypass copy, allocation-free parameter updates, engine state defined before its first
-read, and the idle-free USB-MIDI preset link), each with the exact file/line and pattern it addresses.
+read, the idle-free USB-MIDI preset link, and the 2026-11 engine audit: float-only audio-rate
+math, the constant-time allpass clear, right-sized buffers, locals in the hot loops, dead code
+removed, and the placement moves still open), each with the exact file/line and pattern it addresses.
 
 ## Further Resources
 
@@ -1831,14 +2012,15 @@ Key changes in this fork:
 11. **Modulo-based preset cycling** for cleaner wraparound logic
 12. **Through the Looking Glass Preset** enabled by adopting a `max_delay_lines` value for each preset
 13. **Equal-power makeup gain** on the wet path, so perceived loudness holds as the dry/wet
-    balance changes (`refreshOutputLevels()`, `src/cloudseed.cpp:406-421`, applied by the render
-    helpers at `:428-460`), derived from `reverb->GetAllParameters()` only
+    balance changes (`refreshOutputLevels()`, `src/cloudseed.cpp:468-483`, applied by the render
+    helpers at `:490-522`), derived from `reverb->GetAllParameters()` only
     when `DryOut`/`EarlyOut`/`MainOut` change (`state.outputLevelsDirty`), not per block
 14. **1 kHz whine mitigation**: the reverb is still processed while bypassed
-    (`src/cloudseed.cpp:504-514`) and every main-loop pass calls `keepCoreBusy()`
-    (`src/cloudseed.cpp:536-545`, `:722`): a real FPU `sinf()` of a `volatile` phase plus `volatile`
-    loads and stores, so the core never idles between callbacks
-15. **FPU flush-to-zero enabled at boot** to eliminate denormal stalls (`src/cloudseed.cpp:601`)
+    (`src/cloudseed.cpp:571-579`) and, on the Terrarium only (`kKeepCoreBusy`, `src/board.h`),
+    every main-loop pass calls `keepCoreBusy()` (`src/cloudseed.cpp:601-610`, `:861`): a real
+    FPU `sinf()` of a `volatile` phase plus `volatile` loads and stores, so the core never idles
+    between callbacks
+15. **FPU flush-to-zero enabled at boot** to eliminate denormal stalls (`src/cloudseed.cpp:740`)
 16. **`BOOT_SRAM` app type** (`Makefile:6`): the app is loaded into SRAM from QSPI flash by
     the Daisy bootloader, leaving room for all ten presets
 17. **Per-preset knob mapping** (`[preset.knob_map]` in presets.toml): every knob has a primary
@@ -1849,7 +2031,7 @@ Key changes in this fork:
     ([src/knob_bank.h](src/knob_bank.h)): after power-up, a preset load, or a bank change a knob writes
     nothing until it is turned, then glides its target to the pot's position over 50 ms and
     tracks it 1:1; the stops land exactly on 0.0 / 1.0
-18. **Footswitch gestures** (`processFootswitches()`, `src/cloudseed.cpp:329-354`): tapping
+18. **Footswitch gestures** (`processFootswitches()`, `src/cloudseed.cpp:349-374`): tapping
     FOOTSWITCH_2 cycles the preset on release; holding it selects the secondary knob and toggle
     bank, and its release cycles only if no secondary knob or toggle wrote during the hold.
     FOOTSWITCH_1 toggles bypass on release. Both are
@@ -1857,7 +2039,7 @@ Key changes in this fork:
     each switch from `Pressed()` until `FallingEdge()` so a bounce cannot drop it, and treats any
     overlap of the two as a chord whose releases do nothing
 19. **Active preset configuration cached in `PedalState`** (`loadPreset()`,
-    `src/cloudseed.cpp:175-207`): `knobMap`, `toggleMap`, `defaultDelayLines`, `maxDelayLines` and
+    `src/cloudseed.cpp:183-215`): `knobMap`, `toggleMap`, `defaultDelayLines`, `maxDelayLines` and
     the blink timings are copied out of `gPresets` on load, so the audio callback and the blink
     state machine never touch the parsed bank. While `state.presetChangeInProgress` is set the
     callback passes audio through and makes no engine write, so a load cannot be read
@@ -1884,7 +2066,7 @@ Key changes in this fork:
     toggle target switches the line count between them (off = default, on = max), replacing the
     old hard-coded 2-line default
 22. **USB-MIDI preset upload**: the Seed's micro-USB port is a class-compliant USB-MIDI device
-    at every boot (`gMidiLink.Init()`, `src/cloudseed.cpp:677`); a host can upload a complete
+    at every boot (`gMidiLink.Init()`, `src/cloudseed.cpp:816`); a host can upload a complete
     `presets.toml` text, read the active bank back, or revert to the built-in bank over SysEx
     protocol v1 ([src/preset_protocol.h](src/preset_protocol.h),
     [docs/USB_MIDI.md](docs/USB_MIDI.md)). An upload is validated with the firmware's own parser
@@ -1901,6 +2083,12 @@ Key changes in this fork:
     board). Both output jacks carry the mono signal. The HotHouse three-position toggles drive
     the three-way targets, and the new Scatter early-tap animation (`Scatter`, `ScatterRate`,
     `ScatterDepth`) is available on both
+25. **MIDI live control** ([docs/MIDI.md](docs/MIDI.md), `src/midi_control.h/.cpp`): every
+    preset value plus Engage is a CC and a 14-bit NRPN, and Program Change selects the preset,
+    received on any channel; the pedal reports every change (knob, toggle, footswitch, preset
+    load, MIDI write) on channel 1 within 10 ms. MIDI writes reach the engine through a
+    main-loop -> callback mailbox and re-park the knobs mapped to them; the browser editor uses
+    it for live editing in both directions (see "MIDI live control")
 
 ### Version Information
 
@@ -1919,7 +2107,7 @@ changes; do not restate them here.
 make clean         # Clean previous build (build/terrarium/; BOARD=hothouse for build/hothouse/)
 make libs          # Rebuild libdaisy, DaisySP, and libcloudseed (clean all)
 make presets-check # Validate presets.toml and presets_hothouse.toml without building (the board's bank is also checked by `make`)
-make test          # Host unit tests (knob/toggle/footswitch state machines, preset parser for both boards, engine allocations, USB preset protocol, stored-bank check)
+make test          # Host unit tests (knob/toggle/footswitch state machines, preset parser for both boards, engine allocations, allpass lazy clear, USB preset protocol, stored-bank check, CPU load window, MIDI live control)
 make               # Build CloudSeed for the Terrarium: build/terrarium/cloudseed.bin
 make BOARD=hothouse  # Build for the HotHouse: build/hothouse/cloudseed.bin
 make program-boot  # One time: flash the Daisy bootloader (BOOT_SRAM prerequisite)
@@ -1933,18 +2121,21 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
 ### File Locations
 - Control mapping: `[preset.knob_map]` / `[preset.toggle_map]` in `presets.toml` /
   `presets_hothouse.toml`; dispatch at
-  `src/cloudseed.cpp:374-375` (knobs) / `:382-384` (toggles), `applyKnobTarget()`
-  `src/cloudseed.cpp:224-257`, `applyToggleTarget()` `src/cloudseed.cpp:263-290`
+  `src/cloudseed.cpp:436-437` (knobs) / `:444-446` (toggles), `applyKnobTarget()`
+  `src/cloudseed.cpp:250-277`, `applyToggleTarget()` `src/cloudseed.cpp:283-310`
 - Preset data: `presets.toml` (Terrarium) / `presets_hothouse.toml` (HotHouse), embedded via
   `src/presets_toml.s`, parsed by `src/preset_bank.cpp`
-- Preset application: `CloudSeed/ReverbController.h:47` (`LoadPreset`)
+- Preset application: `CloudSeed/ReverbController.h:34` (`LoadPreset`)
 - Parameters: `CloudSeed/Parameter.h`; names table: `CloudSeed/ParameterNames.h`
 - Hardware config: `src/board.h` (`PedalBoard`, pins per board)
 - USB-MIDI preset upload: [docs/USB_MIDI.md](docs/USB_MIDI.md) (protocol, for host authors);
   normative definition [src/preset_protocol.h](src/preset_protocol.h); link layer
   [src/usb_midi_link.h](src/usb_midi_link.h)
+- MIDI live control: [docs/MIDI.md](docs/MIDI.md) (spec); table `kMidiControls` in
+  [src/midi_control.cpp](src/midi_control.cpp), mirrored by `editor/src/midi/control.ts`
 - Hardware validation checklist: [docs/HARDWARE_TESTS.md](docs/HARDWARE_TESTS.md), driven by
-  `tools/usb_preset_host.py`
+  `tools/usb_preset_host.py` (live control: `cc <n> <v>`, `nrpn <n> <q>`, `pc <p>`, `dump`,
+  `monitor <seconds>`)
 - Browser preset editor: [editor/](editor/) (`bun run dev`; see "USB-MIDI preset upload")
 
 ### Key Concepts
@@ -1984,23 +2175,28 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
   firmware image is flashed; audio passes through dry for the duration of a session
 - CPU meter: `audioCallback()` times each block into `gCpuLoad`; SysEx `0x09 LOAD` (`tools/usb_preset_host.py
   load`, the editor's header meter) reports the last second's average / peak load and overruns
-  (about 77 % / 88 %, 0 overruns on the HotHouse running Chorus) plus the preset playing,
-  which the editor follows
+  (about 20 % / 27 %, 0 overruns on the HotHouse running Chorus) plus the preset playing
+- MIDI live control (docs/MIDI.md): every preset value plus Engage as CC + 14-bit NRPN (same
+  number), Program Change = preset, received omni; the pedal reports changes on channel 1 every
+  10 ms (PC first, CC + NRPN) and the full state after every preset load and on SysEx `0x0A
+  DUMP`. Writes go main loop -> `ControlMailbox` -> `applyMidiWrites()` (8 per block) and re-park
+  the knobs mapped to them; no echo suppression on the pedal (the editor ignores its own echoes
+  for 300 ms). Test from Linux: `python3 tools/usb_preset_host.py cc|nrpn|pc|dump|monitor ...`
 
 ### Quick Modifications
 1. Control mapping → `[preset.knob_map]` / `[preset.toggle_map]` in `presets.toml` /
    `presets_hothouse.toml` (verify with
    `./build/terrarium/preset_check --print-knob-map presets.toml` /
    `./build/terrarium/preset_check --board hothouse --print-toggle-map presets_hothouse.toml`)
-2. Knob feel → `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:49`), `kKnobMoveThreshold`,
+2. Knob feel → `KNOB_SMOOTHING_COEFF` (`src/cloudseed.cpp:50`), `kKnobMoveThreshold`,
    `kKnobApplyEpsilon`, `kKnobRailWindow`, `kKnobGlideBlocks` ([src/knob_bank.h](src/knob_bank.h))
 3. Add/modify presets → `presets.toml` / `presets_hothouse.toml` (`make` validates the board's bank; `make presets-check` validates both)
 4. Blink patterns → `blinks` / `led_on_ms` / `led_off_ms` / `led_pause_ms` in the bank
 5. Switch logic → reassign in `[preset.toggle_map]` (no C++ needed; see "1. Changing Control
-   Mappings"), or in code: `src/cloudseed.cpp:263-290` (`applyToggleTarget()`),
-   `src/cloudseed.cpp:395-401` (delay line count from `state.delayLines`),
-   `src/cloudseed.cpp:504-512` (`reverse.enabled` / `reverse.direct_mix` in the callback),
-   `src/cloudseed.cpp:329-354` (footswitches), [src/board.h](src/board.h) (pins, toggle positions),
+   Mappings"), or in code: `src/cloudseed.cpp:283-310` (`applyToggleTarget()`),
+   `src/cloudseed.cpp:457-463` (delay line count from `state.delayLines`),
+   `src/cloudseed.cpp:571-577` (`reverse.enabled` / `reverse.direct_mix` in the callback),
+   `src/cloudseed.cpp:349-374` (footswitches), [src/board.h](src/board.h) (pins, toggle positions),
    [src/footswitch_gestures.h](src/footswitch_gestures.h) (taps, FS2 hold, 5 s save / restore gestures)
 6. LED2 blink behavior → `src/pedal_leds.cpp:67-113` (`ServicePresetBlink`); save/restore
    confirmation → `src/pedal_leds.cpp:116-139` (`CONFIRM_BLINKS`, `CONFIRM_BLINK_MS` at `:6-7`)
@@ -2010,4 +2206,4 @@ make -C editor test check   # the editor's tests, tsc and Biome (not part of mak
    [src/preset_bank.cpp](src/preset_bank.cpp); shared with knobs via `splitTarget()` /
    `resolveParamTarget()`
 9. User preset store → `UserPreset` / `UserPresets` (`src/pedal_storage.h:34-51`), `PedalStorage::Init()`
-   (`src/pedal_storage.cpp:41-56`), save/restore handling in the main loop (`src/cloudseed.cpp:687-701`)
+   (`src/pedal_storage.cpp:41-56`), save/restore handling in the main loop (`src/cloudseed.cpp:826-840`)

@@ -25,8 +25,9 @@ class FakePedal implements MidiTransport {
   load: number[] | null = [612, 1043, 3];
   /** The preset LOAD reports as playing. */
   currentPreset = 5;
-  /** Frames that arrived while the previous one was still unanswered: the pedal drops them. */
+  /** Frames that arrived while the previous one was still unanswered (the client never overlaps). */
   overlapped = 0;
+  dumps = 0;
   private answering = false;
   private subscribers = new Set<(msg: Uint8Array) => void>();
   private session: { length: number; hash: number; received: number[]; nextSeq: number } | null = null;
@@ -77,8 +78,8 @@ class FakePedal implements MidiTransport {
       return;
     }
     expect([...msg.slice(1, 4)]).toEqual([...HEADER]);
-    // The pedal latches one frame at a time (SysExAssembler): a frame arriving before the
-    // previous one is answered is lost.
+    // The pedal queues received frames, but the client must still never overlap requests:
+    // stop-and-wait is how each reply is matched to its request. An overlap is counted and lost.
     if (this.answering) {
       this.overlapped++;
       return;
@@ -146,6 +147,9 @@ class FakePedal implements MidiTransport {
         return [0, []];
       case CMD.LOAD:
         return this.load ? [0, [...this.load.flatMap((v) => u14(v)), this.currentPreset]] : [1, []];
+      case CMD.DUMP:
+        this.dumps++;
+        return body.length === 0 ? [0, []] : [1, []];
       default:
         return [1, []];
     }
@@ -267,5 +271,18 @@ describe("PresetLink", () => {
     const pedal = new FakePedal(builtIn);
     pedal.load = null;
     await expect(new PresetLink(pedal).load()).rejects.toThrow("LOAD: BadFrame");
+  });
+
+  it("sends DUMP and resolves on its 4A 00 reply", async () => {
+    const pedal = new FakePedal(builtIn);
+    const sent: number[][] = [];
+    const orig = pedal.send.bind(pedal);
+    pedal.send = (msg) => {
+      sent.push([...msg]);
+      orig(msg);
+    };
+    await new PresetLink(pedal).dump();
+    expect(sent).toEqual([[0xf0, 0x7d, 0x43, 0x53, 0x0a, 0xf7]]);
+    expect(pedal.dumps).toBe(1);
   });
 });

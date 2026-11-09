@@ -164,6 +164,25 @@ The protocol is documented for host authors in [docs/USB_MIDI.md](docs/USB_MIDI.
 pedal from Linux without a web page, use `tools/usb_preset_host.py`; the full on-pedal
 validation checklist is [docs/HARDWARE_TESTS.md](docs/HARDWARE_TESTS.md).
 
+## MIDI control
+
+The same USB-MIDI port takes MIDI from any controller, DAW or host program, and reports the
+pedal's state back:
+- Every preset parameter (all 49 engine parameters except the line count), the reverse window
+  and switches, the delay-line selection (Terrarium Default / Max, HotHouse One / Default /
+  Max) and bypass (CC 102, Engage) each have a 7-bit CC and a 14-bit NRPN with the same
+  number, e.g. CC 70 = DryOut, CC 40 = LineDecay.
+- Program Change 0-9 loads presets 1-10.
+- The pedal receives on any channel and sends on channel 1: a Program Change after every
+  preset load, and a CC + NRPN whenever a knob, toggle, footswitch or MIDI message changes a
+  value (checked every 10 ms).
+- A knob whose target was set over MIDI is parked, so nothing jumps; its next turn glides
+  from the MIDI value. Parameter writes are unsaved tweaks, like knob turns (hold FS1 5 s to
+  save them into the preset). Program Change and bypass are remembered across power cycles,
+  like the footswitches.
+
+The control table, value ranges and message details are in [docs/MIDI.md](docs/MIDI.md).
+
 ## Preset editor (browser)
 
 [editor/](editor/) is a local web app, styled after the Lexicon 480L LARC, that edits every
@@ -224,9 +243,18 @@ Using it:
   key (missing or unknown is checked as terrarium). When the page opens, the editor connects on
   its own and READs the pedal's active bank; with no pedal (or other firmware on the Daisy) it
   starts empty and shows why. Browsers ask for MIDI permission on that first connection.
-  While linked, a preset change made on the pedal (FS2) selects that preset in the editor
-  within a quarter second, as long as the editor holds the pedal's bank (read from it, or
-  identical to it); choosing a preset in the editor does not change the pedal.
+  While linked and holding the pedal's bank (read from it, uploaded, or identical to it) the
+  device LED shows **LIVE** and editing is live, in both directions:
+  - Moving a fader or switch is heard on the pedal at once, and a knob, toggle, footswitch or
+    MIDI change on the pedal shows in the editor within about 50 ms. Live edits are snapped to
+    the 14-bit MIDI grid (1/16383); offline edits keep six decimals.
+  - Whoever switches presets wins: choosing a preset in the editor loads it on the pedal with
+    the editor's values, and a preset change on the pedal (FS2, a factory restore, a
+    controller's Program Change) selects that preset in the editor and replaces the editor's
+    values for it with what the pedal plays.
+  - **BYPASS**, next to REVERT, switches the pedal's bypass and follows FS1.
+  - Live edits are not stored on the pedal: SAVE or UPLOAD the bank (or hold FS1 5 s on the
+    pedal) to keep them.
 - Program keys 01-16 select a preset. **DUP** appends a copy at the end, and **DEL** removes
   one; there is no reordering. The page keys show faders with the engine's real units, the
   knob and toggle maps, and the name, LED and delay-line settings. On the KNOBS and SWITCH

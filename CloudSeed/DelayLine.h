@@ -6,8 +6,6 @@
 #include "AllpassDiffuser.h"
 #include "AudioLib/Biquad.h"
 
-using namespace AudioLib;
-
 namespace CloudSeed
 {
 	class DelayLine
@@ -15,15 +13,13 @@ namespace CloudSeed
 	private:
 		ModulatedDelay delay;
 		AllpassDiffuser diffuser;
-		Biquad lowShelf;
-		Biquad highShelf;
+		AudioLib::Biquad lowShelf;
+		AudioLib::Biquad highShelf;
 		AudioLib::Lp1 lowPass;
-		float* tempBuffer;
 		float* mixedBuffer;
 		float* filterOutputBuffer;
 		int bufferSize;
 		float feedback;
-		int samplerate;
 
 	public:
 
@@ -35,7 +31,7 @@ namespace CloudSeed
 
 		DelayLine(int bufferSize, int samplerate)
 			: delay(bufferSize, samplerate * 2, 10000) // 2 second buffer, to prevent buffer overflow with modulation and randomness added (Which may increase effective delay)
-			, diffuser(samplerate, 150) // 150ms buffer
+			, diffuser(bufferSize, samplerate)
 			, lowShelf(AudioLib::Biquad::FilterType::LowShelf, samplerate)
 			, highShelf(AudioLib::Biquad::FilterType::HighShelf, samplerate)
 			, lowPass(samplerate)
@@ -49,52 +45,34 @@ namespace CloudSeed
 			HighShelfEnabled = false;
 			CutoffEnabled = false;
 			LateStageTap = false;
-			tempBuffer = new float[bufferSize];
+			feedback = 0.0f;
 			mixedBuffer = new float[bufferSize];
 			filterOutputBuffer = new float[bufferSize];
 
-			lowShelf.Slope = 1.0;
+			lowShelf.Slope = 1.0f;
 			lowShelf.SetGainDb(-20);
 			lowShelf.Frequency = 20;
 
-			highShelf.Slope = 1.0;
+			highShelf.Slope = 1.0f;
 			highShelf.SetGainDb(-20);
 			highShelf.Frequency = 19000;
 
 			lowPass.SetCutoffHz(1000);
 			lowShelf.Update();
 			highShelf.Update();
-			SetSamplerate(samplerate);
 
-			SetDiffuserSeed(1, 0.0);
+			SetDiffuserSeed(1);
 		}
 
 		~DelayLine()
 		{
-			delete[] tempBuffer;
 			delete[] mixedBuffer;
 			delete[] filterOutputBuffer;
 		}
 
-
-		int GetSamplerate()
-		{
-			return samplerate;
-		}
-
-		void SetSamplerate(int samplerate)
-		{
-			this->samplerate = samplerate;
-			diffuser.SetSamplerate(samplerate);
-			lowPass.SetSamplerate(samplerate);
-			lowShelf.SetSamplerate(samplerate);
-			highShelf.SetSamplerate(samplerate);
-		}
-
-		void SetDiffuserSeed(int seed, float crossSeed)
+		void SetDiffuserSeed(int seed)
 		{
 			diffuser.SetSeed(seed);
-			diffuser.SetCrossSeed(crossSeed);
 		}
 
 		void SetDelay(int delaySamples)
@@ -163,7 +141,7 @@ namespace CloudSeed
 
 		void SetDiffuserModAmount(float amount)
 		{
-			diffuser.SetModulationEnabled(amount > 0.0);
+			diffuser.SetModulationEnabled(amount > 0.0f);
 			diffuser.SetModAmount(amount);
 		}
 
@@ -193,11 +171,12 @@ namespace CloudSeed
 			}
 		}
 
-		void Process(float* input, int sampleCount)
+		void Process(const float* input, int sampleCount)
 		{
 			for (int i = 0; i < sampleCount; i++)
 				mixedBuffer[i] = input[i] + filterOutputBuffer[i] * feedback;
 
+			const float* stage;
 			if (LateStageTap)
 			{
 				if (DiffuserEnabled)
@@ -210,7 +189,7 @@ namespace CloudSeed
 					delay.Process(mixedBuffer, sampleCount);
 				}
 
-				Utils::Copy(delay.GetOutput(), tempBuffer, sampleCount);
+				stage = delay.GetOutput();
 			}
 			else
 			{
@@ -219,23 +198,35 @@ namespace CloudSeed
 				{
 					delay.Process(mixedBuffer, sampleCount);
 					diffuser.Process(delay.GetOutput(), sampleCount);
-					Utils::Copy(diffuser.GetOutput(), tempBuffer, sampleCount);
+					stage = diffuser.GetOutput();
 				}
 				else
 				{
 					delay.Process(mixedBuffer, sampleCount);
-					Utils::Copy(delay.GetOutput(), tempBuffer, sampleCount);
+					stage = delay.GetOutput();
 				}
 			}
 
+			// The feedback filters run from the stage output into filterOutputBuffer
+			// (the first one out of place, the rest in place).
 			if (LowShelfEnabled)
-				lowShelf.Process(tempBuffer, tempBuffer, sampleCount);
+			{
+				lowShelf.Process(stage, filterOutputBuffer, sampleCount);
+				stage = filterOutputBuffer;
+			}
 			if (HighShelfEnabled)
-				highShelf.Process(tempBuffer, tempBuffer, sampleCount);
+			{
+				highShelf.Process(stage, filterOutputBuffer, sampleCount);
+				stage = filterOutputBuffer;
+			}
 			if (CutoffEnabled)
-				lowPass.Process(tempBuffer, tempBuffer, sampleCount);
+			{
+				lowPass.Process(stage, filterOutputBuffer, sampleCount);
+				stage = filterOutputBuffer;
+			}
 
-			Utils::Copy(tempBuffer, filterOutputBuffer, sampleCount);
+			if (stage != filterOutputBuffer)
+				Utils::Copy(stage, filterOutputBuffer, sampleCount);
 		}
 
 		void ClearDiffuserBuffer()
@@ -249,13 +240,10 @@ namespace CloudSeed
 			diffuser.ClearBuffers();
 			lowShelf.ClearBuffers();
 			highShelf.ClearBuffers();
-			lowPass.Output = 0;
+			lowPass.ClearBuffers();
 
 			for (int i = 0; i < bufferSize; i++)
-			{
-				tempBuffer[i] = 0.0;
 				filterOutputBuffer[i] = 0.0;
-			}
 		}
 	};
 }

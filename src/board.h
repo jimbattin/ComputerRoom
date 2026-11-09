@@ -31,6 +31,10 @@ constexpr Board kBoard = Board_Terrarium;
 
 constexpr int kBoardToggles = ToggleCount(kBoard);
 
+// Main-loop busy work (keepCoreBusy() in cloudseed.cpp) that reduces a 1 kHz whine on the
+// Terrarium. Off on the HotHouse: its main loop spins without the artificial FPU/memory load.
+constexpr bool kKeepCoreBusy = kBoard == Board_Terrarium;
+
 // Namespace-scope constexpr, not static members: C++14 has no inline variables, so an
 // odr-used static constexpr member would need an out-of-line definition.
 constexpr daisy::Pin kLed1Pin = daisy::seed::D22;  // active indicator

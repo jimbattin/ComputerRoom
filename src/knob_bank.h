@@ -55,6 +55,19 @@ public:
         if (!primed || forceReset || bank != activeBank)
             Reset(positions, bank);
 
+        // Knobs whose target was written from elsewhere (MIDI): parked at their
+        // current position, so the next turn glides from the new value.
+        for (int i = 0; i < kKnobCount; i++)
+        {
+            if (!repark[i])
+                continue;
+            snapshot[i]  = positions[i];
+            live[i]      = false;
+            glideStep[i] = 0;
+            applied[i]   = 0.0f;
+            repark[i]    = false;
+        }
+
         int n = 0;
         for (int i = 0; i < kKnobCount; i++)
         {
@@ -69,12 +82,17 @@ public:
         return n;
     }
 
+    // Audio callback only: parks `knob` at its position in the next Scan(), as a
+    // Reset() would, without touching the other knobs.
+    void Repark(int knob) { repark[knob] = true; }
+
 private:
     float snapshot[kKnobCount]  = {};  // position at the last Reset()
     float applied[kKnobCount]   = {};  // last value written (glide start before the first write)
     float glideFrom[kKnobCount] = {};  // target value when the knob went live
     int   glideStep[kKnobCount] = {};  // 0 = not gliding, else next step 1..kKnobGlideBlocks
     bool  live[kKnobCount]      = {};  // true once the knob has taken over its target
+    bool  repark[kKnobCount]    = {};  // park at the next Scan() (Repark())
     int   activeBank            = 0;   // bank the snapshot was taken for
     bool  primed                = false;  // false until Reset() has seen real positions
 
@@ -87,6 +105,7 @@ private:
             glideFrom[i] = 0.0f;
             glideStep[i] = 0;
             live[i]      = false;
+            repark[i]    = false;
         }
         activeBank = bank;
         primed     = true;

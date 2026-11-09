@@ -21,6 +21,11 @@ Over that port, MIDI System Exclusive (SysEx) messages can:
 It also answers the standard MIDI Identity Request (section 7, "Identity Request") with the
 board the firmware was built for (Terrarium or HotHouse) and its build id.
 
+The same port carries live control: Control Change, NRPN and Program Change messages in both
+directions set and report every preset parameter, the bypass state and the preset. That is
+specified in [MIDI.md](MIDI.md); this document covers the SysEx protocol and its DUMP command,
+which requests a full live-state report.
+
 The pedal keeps working as a pedal throughout, except during an upload (see section 3).
 
 ## 2. Requirements
@@ -80,6 +85,11 @@ F0 7D 43 53 <cmd | 0x40> <status> <body...> F7
 The reply command is the request's command with bit 6 set (INFO `01` is answered by `41`).
 `<status>` is one of the codes in section 8. The pedal ignores, without replying, any SysEx
 whose first three bytes after `F0` are not `7D 43 53`, except the Identity Request.
+
+Replies are not the only messages the pedal sends: between them it sends unsolicited Control
+Change, NRPN and Program Change messages on channel 1 whenever its live state changes
+([MIDI.md](MIDI.md) section 6). A host reading replies must skip every message that is not
+SysEx.
 
 ## 5. Numbers
 
@@ -287,8 +297,24 @@ pedal: F0 7D 43 53 49 00 <avg u14> <max u14> <overruns u14> <currentPreset> F7
 ```
 
 Status: `Ok`; the three load fields are 0 before the first second completes. Firmware older
-than this command answers `BadFrame`. The editor polls it every 250 ms for its CPU meter and to
-follow the pedal's preset, and `tools/usb_preset_host.py load` prints it.
+than this command answers `BadFrame`. The editor polls it every 250 ms for its CPU meter, and
+`tools/usb_preset_host.py load` prints it. (The editor follows the pedal's preset through the
+live Program Change reports instead, [MIDI.md](MIDI.md).)
+
+### DUMP (`0A`)
+
+Requests the complete live-state report: the pedal queues a Program Change for the current
+preset, then a CC and an NRPN for every one of the 54 controls in [MIDI.md](MIDI.md) section 5,
+and only then the reply. A host that has received the reply has received the whole dump.
+Not a session message: it neither needs nor refreshes a session.
+
+```
+host:  F0 7D 43 53 0A F7
+pedal: B0/C0 channel messages ... F0 7D 43 53 4A 00 F7
+```
+
+Status: `Ok`; `BadFrame` if the request has a body. Firmware older than this command answers
+`BadFrame` without sending a report. `tools/usb_preset_host.py dump` prints the report.
 
 ### Identity Request
 
@@ -379,7 +405,14 @@ sequenceDiagram
 - **Limits.** Text at most 98,304 bytes, ASCII only (every byte below `0x80`, comments
   included), at most 16 presets. The chunk size is 240 bytes. The pedal accepts SysEx
   messages of up to 256 bytes between `F0` and `F7`; longer ones are dropped without a reply.
+- **Receive queue.** Received messages are queued (4 KB) and handled in arrival order, so
+  channel messages and SysEx requests may be interleaved and several requests may arrive back
+  to back; a message that does not fit in the queue is dropped whole. Replies still come one
+  per request, in order.
 - **Other MIDI traffic.** Real-time bytes (`F8`-`FF`) may appear anywhere and are ignored.
-  Any other status byte inside a SysEx message aborts that message. Complete SysEx messages
-  that are neither ours (`7D 43 53`) nor an Identity Request are discarded as they end, so
-  several messages may be sent back to back in one USB transfer.
+  Any other status byte inside a SysEx message aborts that message (a channel status byte
+  then starts a channel message). Complete SysEx messages that are neither ours (`7D 43 53`)
+  nor an Identity Request are discarded as they end, so several messages may be sent back to
+  back in one USB transfer.
+- **Unsolicited messages.** The pedal sends Control Change, NRPN and Program Change messages
+  on channel 1 between replies ([MIDI.md](MIDI.md)); skip them while waiting for a reply.

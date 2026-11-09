@@ -13,10 +13,12 @@ namespace CloudSeed
 	private:
 		float* buffer;
 		float* output;
-		int len;
+		int len;        // buffer (ring) length
+		int blockSize;  // output length: samples per Process() block
 
 		int index;
-		// Update() fills these, Process() plays the *Temp copies (swapped in on isDirty).
+		// Update() fills these and Process() plays them: every SetParameter runs in the
+		// audio callback or behind its passthrough gate, never during Process().
 		// Fixed MaxTaps size: a knob write must not allocate.
 		float tapGains[MaxTaps];
 		int tapPosition[MaxTaps];
@@ -30,13 +32,8 @@ namespace CloudSeed
 		float gain;
 		float decay;
 
-		bool isDirty;
 		bool bloom;
-		float tapGainsTemp[MaxTaps];
-		int tapPositionTemp[MaxTaps];
-		int countTemp;
-		int cleanTapTemp;  // index of the tap-vs-clean mix tap: never animated
-		int cleanTap;
+		int cleanTap;  // index of the tap-vs-clean mix tap: never animated
 
 		// Scatter: each tap's gain is scaled by 1 - depth * (1 + sin(2*pi*phase)) / 2,
 		// i.e. it oscillates between (1 - depth) and 1 of its static value. The factor
@@ -51,7 +48,8 @@ namespace CloudSeed
 	public:
 		// buffer/output are placement-new'd into the SDRAM bump-allocator pool
 		// (custom_pool_allocate) and are never freed, so there is no destructor.
-		MultitapDiffuser(int delayBufferSize);
+		// bufferSize: samples per Process() block; delayBufferSize: ring length.
+		MultitapDiffuser(int bufferSize, int delayBufferSize);
 
 		float* GetOutput() { return output; }
 
@@ -66,7 +64,7 @@ namespace CloudSeed
 		void SetScatterRate(float cyclesPerSample) { scatterRate = cyclesPerSample; }
 		void SetScatterDepth(float depth)       { scatterDepth = depth; }
 
-		void Process(float* input, int sampleCount);
+		void Process(const float* input, int sampleCount);
 		void ClearBuffers();
 
 	private:
@@ -75,7 +73,7 @@ namespace CloudSeed
 		// cost 7.5 KB of SRAM for code that runs once per knob write.
 		void Update();
 		// Process() while Scatter is on or ramping back to the static gains.
-		void ProcessScatter(float* input, int sampleCount);
+		void ProcessScatter(const float* input, int sampleCount);
 	};
 }
 

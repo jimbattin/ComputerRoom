@@ -25,7 +25,8 @@ override BUILD_DIR = build/$(BOARD)
 # Source lists must be set before including the core Makefile: it evaluates
 # vpath directives at parse time (libdaisy/core/Makefile:278-284).
 CPP_SOURCES = src/cloudseed.cpp src/preset_bank.cpp src/pedal_leds.cpp src/sdram_pool.cpp \
-              src/pedal_storage.cpp src/preset_protocol.cpp src/usb_midi_link.cpp
+              src/pedal_storage.cpp src/preset_protocol.cpp src/usb_midi_link.cpp \
+              src/midi_control.cpp
 C_SOURCES += third_party/tomlc99/toml.c
 # Build id for the MIDI Identity Reply (src/preset_protocol.h): the repo's short commit, +dirty when
 # tracked files differ, unknown outside git. build/build_id.c is rewritten only when the id changes, so
@@ -108,13 +109,14 @@ presets-check: $(BUILD_DIR)/preset_check
 	./$(BUILD_DIR)/preset_check --board hothouse --validate presets_hothouse.toml
 
 # Host unit tests for the host-portable modules (knob/toggle/footswitch state
-# machines, preset parser, USB preset protocol, stored-bank check, CPU load window)
-# and the reverb engine. No firmware build needed.
+# machines, preset parser, USB preset protocol, stored-bank check, CPU load window,
+# MIDI live control) and the reverb engine. No firmware build needed.
 HOST_TEST_CXXFLAGS = -std=gnu++14 -O1 -Wall -I. -Isrc -Ithird_party/tomlc99
 HOST_TESTS = $(BUILD_DIR)/knob_bank_test $(BUILD_DIR)/toggle_bank_test \
              $(BUILD_DIR)/footswitch_gestures_test $(BUILD_DIR)/preset_bank_test \
              $(BUILD_DIR)/engine_alloc_test $(BUILD_DIR)/preset_protocol_test \
-             $(BUILD_DIR)/stored_bank_test $(BUILD_DIR)/cpu_load_test
+             $(BUILD_DIR)/stored_bank_test $(BUILD_DIR)/cpu_load_test \
+             $(BUILD_DIR)/midi_control_test $(BUILD_DIR)/allpass_clear_test
 
 # The engine test compiles the whole CloudSeed library for the host.
 CLOUDSEED_HOST_SOURCES = $(wildcard CloudSeed/*.cpp CloudSeed/*/*.cpp)
@@ -131,7 +133,11 @@ $(BUILD_DIR)/preset_bank_test: tests/preset_bank_test.cpp tests/check.h src/pres
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/preset_bank_test.cpp src/preset_bank.cpp $(BUILD_DIR)/toml_host.o
 $(BUILD_DIR)/engine_alloc_test: tests/engine_alloc_test.cpp tests/check.h $(CLOUDSEED_HOST_SOURCES) \
 		$(CLOUDSEED_HEADERS) | $(BUILD_DIR)
-	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/engine_alloc_test.cpp $(CLOUDSEED_HOST_SOURCES)
+	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/engine_alloc_test.cpp $(CLOUDSEED_HOST_SOURCES) \
+		-Wdouble-promotion -Werror=double-promotion
+$(BUILD_DIR)/allpass_clear_test: tests/allpass_clear_test.cpp tests/check.h CloudSeed/ModulatedAllpass.h \
+		CloudSeed/FastSin.h CloudSeed/FastSin.cpp CloudSeed/Utils.h | $(BUILD_DIR)
+	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/allpass_clear_test.cpp CloudSeed/FastSin.cpp
 $(BUILD_DIR)/preset_protocol_test: tests/preset_protocol_test.cpp tests/check.h src/preset_protocol.cpp \
 		src/preset_protocol.h src/cpu_load.h src/preset_bank.cpp src/preset_bank.h CloudSeed/DelayLineCount.h \
 		$(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
@@ -142,6 +148,9 @@ $(BUILD_DIR)/stored_bank_test: tests/stored_bank_test.cpp tests/check.h src/stor
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/stored_bank_test.cpp src/preset_protocol.cpp
 $(BUILD_DIR)/cpu_load_test: tests/cpu_load_test.cpp tests/check.h src/cpu_load.h | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ $<
+$(BUILD_DIR)/midi_control_test: tests/midi_control_test.cpp tests/check.h src/midi_control.cpp \
+		src/midi_control.h src/preset_bank.h CloudSeed/Parameter.h | $(BUILD_DIR)
+	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/midi_control_test.cpp src/midi_control.cpp
 
 test: $(HOST_TESTS)
 	./$(BUILD_DIR)/knob_bank_test
@@ -149,9 +158,11 @@ test: $(HOST_TESTS)
 	./$(BUILD_DIR)/footswitch_gestures_test
 	./$(BUILD_DIR)/preset_bank_test tests/fixtures/two_presets.toml tests/fixtures/two_presets_hothouse.toml
 	./$(BUILD_DIR)/engine_alloc_test
+	./$(BUILD_DIR)/allpass_clear_test
 	./$(BUILD_DIR)/preset_protocol_test tests/fixtures/two_presets.toml
 	./$(BUILD_DIR)/stored_bank_test
 	./$(BUILD_DIR)/cpu_load_test
+	./$(BUILD_DIR)/midi_control_test
 
 .PHONY: test
 

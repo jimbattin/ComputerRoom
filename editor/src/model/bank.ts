@@ -487,6 +487,18 @@ export function formatNorm(v: number): string {
   return s.includes(".") ? s : `${s}.0`;
 }
 
+/**
+ * A float32 value as the shortest TOML float literal that reads back as exactly that float32
+ * (the pedal parses to double, then stores float), always with a decimal point.
+ */
+export function formatFloat32(f: number): string {
+  for (let p = 1; p <= 9; p++) {
+    const s = Number(f.toPrecision(p)).toString();
+    if (Math.fround(Number(s)) === f) return /[.e]/.test(s) ? s : `${s}.0`;
+  }
+  return formatNorm(f);
+}
+
 const OPTIONAL_MS = ["led_on_ms", "led_off_ms", "led_pause_ms"];
 
 function presetBlock(doc: BankDoc, preset: number): PresetBlock {

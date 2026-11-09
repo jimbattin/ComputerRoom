@@ -1,6 +1,7 @@
-// Host test for the USB-MIDI preset protocol: SysEx framing from the USB stream,
-// USB-MIDI packing of replies, and the upload/read/revert state machine, plus an
-// end-to-end run through the real preset parser (fixture path in argv[1]).
+// Host test for the USB-MIDI preset protocol: the receive queue (SysEx frames and
+// channel messages from the USB stream), USB-MIDI packing of replies, and the
+// upload/read/revert/DUMP state machine, plus an end-to-end run through the real preset
+// parser (fixture path in argv[1]).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -112,45 +113,111 @@ static std::string makeText(size_t n) {
     return s;
 }
 
-static void testAssembler() {
-    SysExAssembler a;
+// Pops the next queued message; empty when the queue is empty.
+static Bytes pop(MidiInQueue& q) {
+    uint8_t out[MidiInQueue::kMaxMessage];
+    const size_t n = q.Pop(out);
+    return Bytes(out, out + n);
+}
+
+static void testQueue() {
+    static MidiInQueue q;  // static: 4 KB+ ring
     const uint8_t p1[] = {0xF0, 0x7D, 0x43}, p2[] = {0xF8, 0x53, 0x01}, p3[] = {0xF7};
-    a.Feed(p1, sizeof p1);
-    CHECK(!a.Ready());
-    a.Feed(p2, sizeof p2);  // 0xF8 (clock) interleaved mid-frame is ignored
-    a.Feed(p3, sizeof p3);
-    CHECK(a.Ready());
-    CHECK(a.Length() == 4);
-    CHECK(memcmp(a.Frame(), "\x7D\x43\x53\x01", 4) == 0);
+    q.Feed(p1, sizeof p1);
+    CHECK(pop(q).empty());
+    q.Feed(p2, sizeof p2);  // 0xF8 (clock) interleaved mid-frame is ignored
+    q.Feed(p3, sizeof p3);
+    CHECK(pop(q) == (Bytes{0x7D, 0x43, 0x53, 0x01}));
+    CHECK(pop(q).empty());
 
-    // A frame arriving while the slot is busy is dropped entirely.
-    const uint8_t busy[] = {0xF0, 0x7D, 0x43, 0x53, 0x02, 0xF7};
-    a.Feed(busy, sizeof busy);
-    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[0] == 0x7D);
-    a.Release();
-    CHECK(!a.Ready());
-    const uint8_t next[] = {0xF0, 0x7D, 0x43, 0x53, 0x07, 0xF7};
-    a.Feed(next, sizeof next);
-    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[3] == 0x07);
-    a.Release();
+    // A frame arriving while one is pending is queued and popped second.
+    const uint8_t two[] = {0xF0, 0x7D, 0x43, 0x53, 0x02, 0xF7, 0xF0, 0x7D, 0x43, 0x53, 0x07, 0xF7};
+    q.Feed(two, sizeof two);
+    CHECK(pop(q) == (Bytes{0x7D, 0x43, 0x53, 0x02}));
+    CHECK(pop(q) == (Bytes{0x7D, 0x43, 0x53, 0x07}));
+    CHECK(pop(q).empty());
 
-    // 257 data bytes overflow the slot: never ready.
+    // 257 data bytes overflow: never queued.
     Bytes big{0xF0, 0x7D, 0x43, 0x53};
-    big.insert(big.end(), SysExAssembler::kMaxFrame + 1 - 3, 0x11);
+    big.insert(big.end(), MidiInQueue::kMaxMessage + 1 - 3, 0x11);
     big.push_back(0xF7);
-    a.Feed(big.data(), big.size());
-    CHECK(!a.Ready());
-    // Exactly kMaxFrame bytes fit.
+    q.Feed(big.data(), big.size());
+    CHECK(pop(q).empty());
+    // Exactly kMaxMessage bytes fit.
     big.erase(big.begin() + 4);
-    a.Feed(big.data(), big.size());
-    CHECK(a.Ready() && a.Length() == SysExAssembler::kMaxFrame);
-    a.Release();
+    q.Feed(big.data(), big.size());
+    CHECK(pop(q).size() == MidiInQueue::kMaxMessage);
 
     // A stray status byte (note on) aborts the frame; its F7 then completes nothing.
     // Without the abort this would be a valid frame of ours.
     const uint8_t stray[] = {0xF0, 0x7D, 0x43, 0x53, 0x90, 0x40, 0x7F, 0x01, 0xF7};
-    a.Feed(stray, sizeof stray);
-    CHECK(!a.Ready());
+    q.Feed(stray, sizeof stray);
+    CHECK(pop(q).empty());
+}
+
+static void testQueueChannel() {
+    static MidiInQueue q;
+    // A CC between two of our frames pops in arrival order.
+    const uint8_t mixed[] = {0xF0, 0x7D, 0x43, 0x53, 0x01, 0xF7, 0xB0, 0x46, 0x40,
+                             0xF0, 0x7D, 0x43, 0x53, 0x09, 0xF7};
+    q.Feed(mixed, sizeof mixed);
+    CHECK(pop(q) == (Bytes{0x7D, 0x43, 0x53, 0x01}));
+    const Bytes cc = pop(q);
+    CHECK(cc == (Bytes{0xB0, 0x46, 0x40}));
+    CHECK(!cc.empty() && (cc[0] & 0x80));  // channel message
+    CHECK(pop(q) == (Bytes{0x7D, 0x43, 0x53, 0x09}));
+    CHECK(pop(q).empty());
+
+    // Note on and pitch bend are dropped and leave a following CC intact.
+    const uint8_t other[] = {0x90, 0x40, 0x7F, 0xE0, 0x00, 0x40, 0xB3, 0x0D, 0x22};
+    q.Feed(other, sizeof other);
+    CHECK(pop(q) == (Bytes{0xB3, 0x0D, 0x22}));
+    CHECK(pop(q).empty());
+
+    // Running status, split across transfers, plus program change and channel pressure.
+    const uint8_t rs1[] = {0xB0, 0x63, 0x00, 0x62}, rs2[] = {0x46, 0xF8, 0x06, 0x40},
+                  pcs[] = {0xC2, 0x05, 0x06, 0xD0, 0x10, 0xB0, 0x07};
+    q.Feed(rs1, sizeof rs1);
+    q.Feed(rs2, sizeof rs2);
+    CHECK(pop(q) == (Bytes{0xB0, 0x63, 0x00}));
+    CHECK(pop(q) == (Bytes{0xB0, 0x62, 0x46}));
+    CHECK(pop(q) == (Bytes{0xB0, 0x06, 0x40}));
+    q.Feed(pcs, sizeof pcs);
+    CHECK(pop(q) == (Bytes{0xC2, 0x05}));
+    CHECK(pop(q) == (Bytes{0xC2, 0x06}));
+    CHECK(pop(q).empty());  // D0 10 dropped; B0 07 still incomplete
+
+    // A CC inside a SysEx aborts the SysEx and is queued.
+    const uint8_t inside[] = {0xF0, 0x7D, 0x43, 0x53, 0xB0, 0x46, 0x40, 0x01, 0xF7};
+    q.Feed(inside, sizeof inside);
+    CHECK(pop(q) == (Bytes{0xB0, 0x46, 0x40}));
+    CHECK(pop(q).empty());
+
+    // F1-F6 abort a partial channel message; data without a status is ignored.
+    const uint8_t aborted[] = {0xB0, 0x46, 0xF6, 0x40, 0x12, 0xF7, 0x01, 0x02};
+    q.Feed(aborted, sizeof aborted);
+    CHECK(pop(q).empty());
+}
+
+static void testQueueFull() {
+    static MidiInQueue q;
+    // A CC record takes 2 + 3 bytes: 819 fill the ring to one free byte.
+    const size_t fit = MidiInQueue::kQueueBytes / 5;
+    for (size_t i = 0; i < fit; ++i) {
+        const uint8_t m[] = {0xB0, 0x46, static_cast<uint8_t>(i & 0x7F)};
+        q.Feed(m, sizeof m);
+    }
+    const uint8_t extra[] = {0xB1, 0x01, 0x01};
+    q.Feed(extra, sizeof extra);  // no room: dropped whole
+    CHECK(pop(q) == (Bytes{0xB0, 0x46, 0x00}));
+    const uint8_t after[] = {0xB2, 0x02, 0x02};
+    q.Feed(after, sizeof after);  // room again after a Pop
+    bool order = true;
+    for (size_t i = 1; i < fit; ++i)
+        order = order && pop(q) == (Bytes{0xB0, 0x46, static_cast<uint8_t>(i & 0x7F)});
+    CHECK(order);
+    CHECK(pop(q) == (Bytes{0xB2, 0x02, 0x02}));
+    CHECK(pop(q).empty());
 }
 
 static void testPacker() {
@@ -347,24 +414,23 @@ static void testForeignAndMalformed() {
     CHECK(!fx.proto.SessionActive());
 }
 
-static void testAssemblerEdges() {
-    SysExAssembler a;
+static void testQueueEdges() {
+    static MidiInQueue q;
     const uint8_t lone[] = {0xF7, 0x01, 0x02};  // F7 and data without an F0
-    a.Feed(lone, sizeof lone);
-    CHECK(!a.Ready());
+    q.Feed(lone, sizeof lone);
+    CHECK(pop(q).empty());
 
     const uint8_t empty[] = {0xF0, 0xF7};  // empty frame: dropped
-    a.Feed(empty, sizeof empty);
-    CHECK(!a.Ready());
+    q.Feed(empty, sizeof empty);
+    CHECK(pop(q).empty());
 
     // a new F0 restarts
     const uint8_t restart[] = {0xF0, 0x11, 0x22, 0xF0, 0x7D, 0x43, 0x53, 0x01, 0xF7};
-    a.Feed(restart, sizeof restart);
-    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[0] == 0x7D && a.Frame()[3] == 0x01);
-    const uint8_t clock[] = {0xF8, 0xFE};  // real-time bytes while busy leave the frame intact
-    a.Feed(clock, sizeof clock);
-    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[0] == 0x7D);
-    a.Release();
+    q.Feed(restart, sizeof restart);
+    const uint8_t clock[] = {0xF8, 0xFE};  // real-time bytes leave the queue intact
+    q.Feed(clock, sizeof clock);
+    CHECK(pop(q) == (Bytes{0x7D, 0x43, 0x53, 0x01}));
+    CHECK(pop(q).empty());
 }
 
 static void testHashHighBits() {
@@ -466,13 +532,13 @@ static void testFlashFailures() {
 
 // End to end through the real parser, with every host frame delivered the way the
 // pedal receives it: packed into USB-MIDI packets, unwrapped per code index
-// (libdaisy/src/hid/usb_midi.cpp:163-195) and fed to the assembler one packet at a time.
+// (libdaisy/src/hid/usb_midi.cpp:163-195) and fed to the receive queue one packet at a time.
 static PresetBank gCheckBank;
 static bool realValidator(const char* t, uint32_t n, char* err, int errLen) {
     return ParsePresetBankText(t, n, Board_Terrarium, gCheckBank, err, errLen, malloc, free);
 }
 
-static void deliver(Fixture& fx, SysExAssembler& as, const Bytes& body) {
+static void deliver(Fixture& fx, MidiInQueue& q, const Bytes& body) {
     Bytes msg(1, 0xF0);
     msg.insert(msg.end(), body.begin(), body.end());
     msg.push_back(0xF7);
@@ -481,16 +547,17 @@ static void deliver(Fixture& fx, SysExAssembler& as, const Bytes& body) {
     CHECK(n > 0);
     static const uint8_t kCinSize[16] = {3, 3, 2, 3, 3, 1, 2, 3, 3, 3, 3, 3, 2, 2, 3, 1};
     for (size_t i = 0; i < n; i += 4)
-        as.Feed(packets + i + 1, kCinSize[packets[i] & 0x0F]);
-    CHECK(as.Ready());
-    if (!as.Ready()) return;
-    fx.proto.Handle(as.Frame(), as.Length(), 0);
+        q.Feed(packets + i + 1, kCinSize[packets[i] & 0x0F]);
+    uint8_t f[MidiInQueue::kMaxMessage];
+    const size_t len = q.Pop(f);
+    CHECK(len == body.size());
+    if (len == 0) return;
+    fx.proto.Handle(f, len, 0);
     checkReplyWellFormed(fx.proto);
-    as.Release();
 }
 
 static UploadAction uploadOverUsb(Fixture& fx, const std::string& text) {
-    SysExAssembler as;
+    static MidiInQueue as;
     Bytes f = frame(0x02);
     appendU21(f, (uint32_t)text.size());
     appendU32(f, Fnv1a32(text.data(), (uint32_t)text.size()));
@@ -548,33 +615,53 @@ static void testEndToEnd(const char* fixturePath) {
     CHECK(memcmp(fx.proto.Reply() + 6, expected, len) == 0);
 }
 
-static void testAssemblerBurst() {
-    SysExAssembler a;
+static void testQueueBurst() {
+    static MidiInQueue a;
     // Other devices' frames under the same non-commercial ID, then ours, in one transfer.
     const uint8_t burst[] = {0xF0, 0x7D, 0x70, 0x01, 0x06, 0xF7, 0xF0, 0x7D, 0x33, 0x01,
                              0x13, 0xF7, 0xF0, 0x7D, 0x29, 0x01, 0x70, 0x44, 0x46, 0x55,
                              0xF7, 0xF0, 0x7D, 0x43, 0x53, 0x08, 0xF7};
     a.Feed(burst, sizeof burst);
-    CHECK(a.Ready() && a.Length() == 4);
-    CHECK(memcmp(a.Frame(), "\x7D\x43\x53\x08", 4) == 0);
-    a.Release();
+    CHECK(pop(a) == (Bytes{0x7D, 0x43, 0x53, 0x08}));
+    CHECK(pop(a).empty());
 
     // A foreign frame, then an Identity Request.
     const uint8_t ident[] = {0xF0, 0x7D, 0x70, 0x01, 0x01, 0xF7, 0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7};
     a.Feed(ident, sizeof ident);
-    CHECK(a.Ready() && a.Length() == 4 && memcmp(a.Frame(), "\x7E\x7F\x06\x01", 4) == 0);
-    a.Release();
+    CHECK(pop(a) == (Bytes{0x7E, 0x7F, 0x06, 0x01}));
+    CHECK(pop(a).empty());
 
-    // An echoed Identity Reply is not latched.
+    // An echoed Identity Reply is not queued.
     const uint8_t echo[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x43, 0x53,
                             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0xF7};
     a.Feed(echo, sizeof echo);
-    CHECK(!a.Ready());
+    CHECK(pop(a).empty());
 
-    // A generic HELLO under a different family is not latched.
+    // A generic HELLO under a different family is not queued.
     const uint8_t hello[] = {0xF0, 0x7D, 0x43, 0x01, 0x01, 0xF7};
     a.Feed(hello, sizeof hello);
-    CHECK(!a.Ready());
+    CHECK(pop(a).empty());
+}
+
+// DUMP: Ok with no body, action Dump; not a session message.
+static void testDump() {
+    Fixture fx;
+    CHECK(fx.send(frame(0x0A)) == UploadAction::Dump);
+    static const uint8_t kReply[] = {0xF0, 0x7D, 0x43, 0x53, 0x4A, 0x00, 0xF7};
+    CHECK(fx.proto.ReplyLength() == sizeof kReply);
+    CHECK(memcmp(fx.proto.Reply(), kReply, sizeof kReply) == 0);
+
+    Bytes f = frame(0x0A);
+    f.push_back(0x00);
+    CHECK(fx.send(f) == UploadAction::None);
+    CHECK(fx.replyCmd() == 0x4A && fx.status() == (int)UploadStatus::BadFrame);
+
+    const std::string text = makeText(500);
+    fx.begin(500, Fnv1a32(text.data(), 500), 0);
+    CHECK(fx.send(frame(0x0A), 4000) == UploadAction::Dump);
+    CHECK(fx.proto.SessionActive());  // a DUMP neither ends the session ...
+    fx.proto.Tick(5000);
+    CHECK(!fx.proto.SessionActive());  // ... nor refreshes its timer
 }
 
 static std::string identityBuildId(const PresetProtocol& p) {
@@ -684,8 +771,10 @@ int main(int argc, char** argv) {
     }
     CHECK(Fnv1a32("", 0) == 2166136261u);
     CHECK(Fnv1a32("a", 1) == 0xE40C292Cu);  // published FNV-1a test vector
-    testAssembler();
-    testAssemblerEdges();
+    testQueue();
+    testQueueChannel();
+    testQueueFull();
+    testQueueEdges();
     testPacker();
     testInfo();
     testUpload();
@@ -699,9 +788,10 @@ int main(int argc, char** argv) {
     testSeqEdges();
     testSevenBitReplies();
     testFlashFailures();
-    testAssemblerBurst();
+    testQueueBurst();
     testIdentity();
     testDfu();
+    testDump();
     testLoad();
     testEndToEnd(argv[1]);
     return CheckSummary("preset_protocol_test");

@@ -1,82 +1,27 @@
 #pragma once
 
-#include <cmath>
-#define PI 3.141592653589793238462643383
+#include "Lp1.h"
 
 namespace AudioLib
 {
-	class Hp1
+	// One-pole high-pass: the input minus Lp1's low-pass output.
+	class Hp1 : public Lp1
 	{
-	private:
-		float fs;
-		float b0, a1;
-		float lpOut;
-		float cutoffHz;
-
 	public:
-		float Output;
+		using Lp1::Lp1;
 
-	public:
-		Hp1(float fs)
+		// In place is allowed (input == output).
+		void Process(const float* input, float* output, int len)
 		{
-			this->lpOut = 0;
-			this->fs = fs;
-		}
-
-		float GetSamplerate()
-		{
-			return fs;
-		}
-
-		void SetSamplerate(float samplerate)
-		{
-			fs = samplerate;
-		}
-
-		float GetCutoffHz()
-		{
-			return cutoffHz;
-		}
-
-		void SetCutoffHz(float hz)
-		{
-			cutoffHz = hz;
-			Update();
-		}
-
-		void Update()
-		{
-			// Prevent going over the Nyquist frequency
-			if (cutoffHz >= fs * 0.5)
-				cutoffHz = fs * 0.499;
-
-			auto x = 2 * PI * cutoffHz / fs;
-			auto nn = (2 - cos(x));
-			auto alpha = nn - sqrt(nn * nn - 1);
-
-			a1 = alpha;
-			b0 = 1 - alpha;
-		}
-
-		float Process(float input)
-		{
-			if (input == 0 && lpOut < 0.000000000001)
-			{
-				Output = 0;
-			}
-			else
-			{
-				lpOut = b0 * input + a1 * lpOut;
-				Output = input - lpOut;
-			}
-
-			return Output;
-		}
-
-		void Process(float* input, float* output, int len)
-		{
+			const float b0 = this->b0, a1 = this->a1;
+			float s = state;
 			for (int i = 0; i < len; i++)
-				output[i] = Process(input[i]);
+			{
+				const float x = input[i];
+				s = b0 * x + a1 * s;
+				output[i] = x - s;
+			}
+			state = s;
 		}
 	};
 }

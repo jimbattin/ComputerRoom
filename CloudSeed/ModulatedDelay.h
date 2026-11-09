@@ -1,7 +1,6 @@
 #ifndef MODULATEDDELAY
 #define MODULATEDDELAY
 
-#include "ModulatedDelay.h"
 #include "Utils.h"
 #include "FastSin.h"
 
@@ -13,7 +12,7 @@ namespace CloudSeed
 	{
 	private:
 
-		const int ModulationUpdateRate = 8;
+		static const int ModulationUpdateRate = 8;
 
 		float* delayBuffer;
 		float* output;
@@ -42,9 +41,9 @@ namespace CloudSeed
 			this->output = new (custom_pool_allocate(sizeof(float) * bufferSize)) float[bufferSize];
 			this->SampleDelay = sampleDelay;
 			writeIndex = 0;
-			modPhase = 0.01 + 0.98 * (std::rand() / (float)RAND_MAX);
-			ModRate = 0.0;
-			ModAmount = 0.0;
+			modPhase = FastSin::RandomPhase();
+			ModRate = 0.0f;
+			ModAmount = 0.0f;
 			Update();
 		}
 
@@ -59,23 +58,35 @@ namespace CloudSeed
 			return output;
 		}
 
-		void Process(float* input, int sampleCount)
+		void Process(const float* input, int sampleCount)
 		{
-			for (int i = 0; i < sampleCount; i++)
+			// Locals in each 8-sample segment between Update()s: the float stores to
+			// buffer/output may alias the members, which otherwise reload every sample.
+			int i = 0;
+			while (i < sampleCount)
 			{
 				if (samplesProcessed == ModulationUpdateRate)
 					Update();
+				int end = i + (ModulationUpdateRate - samplesProcessed);
+				if (end > sampleCount)
+					end = sampleCount;
+				samplesProcessed += end - i;
 
-				delayBuffer[writeIndex] = input[i];
-				output[i] = delayBuffer[readIndexA] * gainA + delayBuffer[readIndexB] * gainB;
-
-				writeIndex++;
-				readIndexA++;
-				readIndexB++;
-				if (writeIndex >= delayBufferSizeSamples) writeIndex -= delayBufferSizeSamples;
-				if (readIndexA >= delayBufferSizeSamples) readIndexA -= delayBufferSizeSamples;
-				if (readIndexB >= delayBufferSizeSamples) readIndexB -= delayBufferSizeSamples;
-				samplesProcessed++;
+				float* const buf = delayBuffer;
+				const int size = delayBufferSizeSamples;
+				const float gA = gainA, gB = gainB;
+				int w = writeIndex, a = readIndexA, b = readIndexB;
+				for (; i < end; i++)
+				{
+					buf[w] = input[i];
+					output[i] = buf[a] * gA + buf[b] * gB;
+					if (++w >= size) w -= size;
+					if (++a >= size) a -= size;
+					if (++b >= size) b -= size;
+				}
+				writeIndex = w;
+				readIndexA = a;
+				readIndexB = b;
 			}
 		}
 
@@ -89,11 +100,7 @@ namespace CloudSeed
 	private:
 		void Update()
 		{
-			modPhase += ModRate * ModulationUpdateRate;
-			if (modPhase > 1)
-				modPhase = std::fmod(modPhase, 1.0f);
-
-			auto mod = FastSin::Get(modPhase);
+			auto mod = FastSin::Step(modPhase, ModRate * ModulationUpdateRate);
 			auto totalDelay = SampleDelay + ModAmount * mod;
 
 			auto delayA = (int)totalDelay;

@@ -1,3 +1,4 @@
+import { createLiveDecoder, type LiveEvent, nrpnMessages, programMessage } from "./control";
 import {
   buildFrame,
   CMD,
@@ -45,9 +46,10 @@ export interface LinkOptions {
 export type Progress = (done: number, total: number) => void;
 
 /**
- * Stop-and-wait client for protocol v1: one request in flight at a time. Requests are queued,
- * so the periodic LOAD poll can never overlap another operation's request (the pedal latches
- * one frame at a time and would drop the second).
+ * Client for protocol v1 plus the MIDI live-control messages. SysEx requests are stop-and-wait:
+ * one in flight at a time, queued, so that each reply is matched to its request (the periodic
+ * LOAD poll never overlaps another operation's request). Live-control CC/NRPN/PC messages are
+ * sent directly, fire-and-forget; the pedal queues them.
  */
 export class PresetLink {
   private readonly replyTimeoutMs: number;
@@ -149,6 +151,29 @@ export class PresetLink {
   /** The audio callback's load over the last second; firmware without LOAD replies BadFrame. */
   async load(): Promise<LoadReply> {
     return decodeLoad((await this.call(CMD.LOAD)).body);
+  }
+
+  /**
+   * DUMP (0x0A): the pedal reports PC + every control before its reply, so once this resolves
+   * the whole state has arrived through onLive().
+   */
+  async dump(): Promise<void> {
+    await this.call(CMD.DUMP);
+  }
+
+  /** NRPN `number` = `q` (14-bit), not queued behind requests. */
+  sendControl(number: number, q: number): void {
+    for (const msg of nrpnMessages(number, q)) this.transport.send(msg);
+  }
+
+  /** Program Change `p` (0-based), not queued behind requests. */
+  sendProgram(p: number): void {
+    this.transport.send(programMessage(p));
+  }
+
+  /** Subscribes to the pedal's live reports (NRPN controls and Program Changes). */
+  onLive(cb: (ev: LiveEvent) => void): () => void {
+    return this.transport.subscribe(createLiveDecoder(cb));
   }
 
   /** The active bank's text, checked against INFO's activeHash. */

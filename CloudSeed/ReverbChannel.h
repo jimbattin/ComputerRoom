@@ -2,7 +2,8 @@
 #ifndef REVERBCHANNEL
 #define REVERBCHANNEL
 
-#include <memory>
+#include <cmath>
+#include <new>
 #include "Parameter.h"
 #include "DelayLineCount.h"
 #include "ModulatedDelay.h"
@@ -12,24 +13,12 @@
 #include "AudioLib/Hp1.h"
 #include "DelayLine.h"
 #include "AllpassDiffuser.h"
-
-#include <cmath>
-#include "ReverbChannel.h"
-#include "AudioLib/ShaRandom.h"
 #include "Utils.h"
 
 extern void* custom_pool_allocate(size_t size);
 
-using namespace std;
-
 namespace CloudSeed
 {
-	enum class ChannelLR
-	{
-		Left,
-		Right
-	};
-
 	class ReverbChannel
 	{
 	private:
@@ -40,13 +29,11 @@ namespace CloudSeed
 		ModulatedDelay preDelay;
 		MultitapDiffuser multitap;
 		AllpassDiffuser diffuser;
-		vector<DelayLine*> lines;
+		DelayLine* lines[TotalLineCount];
 		AudioLib::SeedSeries<TotalLineCount * 3> lineSeeds;  // delay, mod amount, mod rate per line
 		AudioLib::Hp1 highPass;
 		AudioLib::Lp1 lowPass;
 		float* tempBuffer;
-		float* lineOutBuffer;
-		float* outBuffer;
 		int postDiffusionSeed;
 
 		// Used the the main process loop
@@ -60,22 +47,18 @@ namespace CloudSeed
 		float predelayOut;
 		float earlyOut;
 		float lineOut;
-		float crossSeed;
-		ChannelLR channelLr;
 
 	public:
 		
-		ReverbChannel(int bufferSize, int samplerate, ChannelLR leftOrRight)
+		ReverbChannel(int bufferSize, int samplerate)
 			: preDelay(bufferSize, samplerate + 2, 100) // 1000 ms max PreDelay + 2: ModulatedDelay reads SampleDelay and SampleDelay + 1 behind the write index
-			, multitap(samplerate) // use samplerate = 1 second delay buffer
-			, diffuser(samplerate, 150) // 150ms buffer, to allow for 100ms + modulation time
+			, multitap(bufferSize, samplerate) // use samplerate = 1 second delay buffer
+			, diffuser(bufferSize, samplerate)
 			, highPass(samplerate)
 			, lowPass(samplerate)
 		{
-			this->channelLr = leftOrRight;
-
 			for (int i = 0; i < TotalLineCount; i++)
-				lines.push_back(new (custom_pool_allocate(sizeof(DelayLine)))DelayLine(bufferSize, samplerate));
+				lines[i] = new (custom_pool_allocate(sizeof(DelayLine)))DelayLine(bufferSize, samplerate);
 
 			this->bufferSize = bufferSize;
 
@@ -89,7 +72,10 @@ namespace CloudSeed
 			highPassEnabled = false;
 			lowPassEnabled = false;
 			postDiffusionSeed = 0;
-			crossSeed = 0.0;
+			dryOut = 0.0f;
+			predelayOut = 0.0f;
+			earlyOut = 0.0f;
+			lineOut = 0.0f;
 			lineCount = TotalLineCount;
 			perLineGain = 1.0f / std::sqrt((float)lineCount);
 			diffuser.SetInterpolationEnabled(true);
@@ -97,60 +83,18 @@ namespace CloudSeed
 			lowPass.SetCutoffHz(20000);
 
 			tempBuffer = new  (custom_pool_allocate(sizeof(float)*bufferSize))float[bufferSize];
-			lineOutBuffer = new (custom_pool_allocate(sizeof(float) * bufferSize))float[bufferSize];
-			outBuffer = new (custom_pool_allocate(sizeof(float) * bufferSize))float[bufferSize];
 
 			this->samplerate = samplerate;
 		}
 
 		~ReverbChannel()
 		{
-			// lines/tempBuffer/lineOutBuffer/outBuffer are placement-new'd into the
+			// lines/tempBuffer are placement-new'd into the
 			// SDRAM bump-allocator pool (custom_pool_allocate) and are never freed;
 			// the pool has no matching deallocator. Explicitly run DelayLine's
 			// destructor without attempting to deallocate its pool-backed storage.
-			for (auto line : lines)
+			for (DelayLine* line : lines)
 				line->~DelayLine();
-		}
-
-		int GetSamplerate()
-		{
-			return samplerate;
-		}
-
-		void SetSamplerate(int samplerate)
-		{
-			this->samplerate = samplerate;
-			highPass.SetSamplerate(samplerate);
-			lowPass.SetSamplerate(samplerate);
-
-			for (size_t i = 0; i < lines.size(); i++)
-			{
-				lines[i]->SetSamplerate(samplerate);
-			}
-
-			auto update = [&](Parameter p) { SetParameter(p, parameters[(int)p]); };
-			update(Parameter::PreDelay);
-			update(Parameter::TapLength);
-			update(Parameter::DiffusionDelay);
-			update(Parameter::LineDelay);
-			update(Parameter::LateDiffusionDelay);
-			update(Parameter::EarlyDiffusionModRate);
-			update(Parameter::LineModRate);
-			update(Parameter::LateDiffusionModRate);
-			update(Parameter::ScatterRate);
-			update(Parameter::LineModAmount);
-			UpdateLines();
-		}
-
-		float* GetOutput()
-		{
-			return outBuffer;
-		}
-
-		float* GetLineOutput()
-		{
-			return lineOutBuffer;
 		}
 
 		void SetParameter(Parameter para, float value)
@@ -191,7 +135,7 @@ namespace CloudSeed
 				multitap.SetBloom((bool)value);
 				break;
 			case Parameter::Scatter:
-				multitap.SetScatter(value >= 0.5);
+				multitap.SetScatter(value >= 0.5f);
 				break;
 			case Parameter::ScatterRate:
 				multitap.SetScatterRate(value / samplerate);
@@ -202,7 +146,7 @@ namespace CloudSeed
 
 			case Parameter::DiffusionEnabled:
 			{
-				auto newVal = value >= 0.5;
+				auto newVal = value >= 0.5f;
 				if (newVal != diffuserEnabled)
 					diffuser.ClearBuffers();
 				diffuserEnabled = newVal;
@@ -239,7 +183,7 @@ namespace CloudSeed
 			case Parameter::LateDiffusionEnabled:
 				for (auto line : lines)
 				{
-					auto newVal = value >= 0.5;
+					auto newVal = value >= 0.5f;
 					if (newVal != line->DiffuserEnabled)
 						line->ClearDiffuserBuffer();
 					line->DiffuserEnabled = newVal;
@@ -280,7 +224,7 @@ namespace CloudSeed
 				break;
 
 			case Parameter::EarlyDiffusionModAmount:
-				diffuser.SetModulationEnabled(value > 0.0);
+				diffuser.SetModulationEnabled(value > 0.0f);
 				diffuser.SetModAmount(Ms2Samples(value));
 				break;
 			case Parameter::EarlyDiffusionModRate:
@@ -315,13 +259,13 @@ namespace CloudSeed
 				break;
 
 			case Parameter::CrossSeed:
-
-				crossSeed = channelLr == ChannelLR::Right ? value : 0;
-				lineSeeds.SetCrossSeed(crossSeed);
 				multitap.SetCrossSeed(value);
 				diffuser.SetCrossSeed(value);
+				// Not a cross-seed effect: the line diffusers' mod amount and rate are
+				// scaled by their seeds, which PostDiffusionSeed changes without
+				// re-applying them; LoadPreset() relies on this call (CrossSeed comes
+				// after PostDiffusionSeed) to pick up the new seeds.
 				UpdateLines();
-				UpdatePostDiffusion();
 				break;
 
 			case Parameter::DryOut:
@@ -338,119 +282,89 @@ namespace CloudSeed
 				break;
 
 			case Parameter::HiPassEnabled:
-				highPassEnabled = value >= 0.5;
+				highPassEnabled = value >= 0.5f;
 				break;
 			case Parameter::LowPassEnabled:
-				lowPassEnabled = value >= 0.5;
+				lowPassEnabled = value >= 0.5f;
 				break;
 			case Parameter::LowShelfEnabled:
 				for (auto line : lines)
-					line->LowShelfEnabled = value >= 0.5;
+					line->LowShelfEnabled = value >= 0.5f;
 				break;
 			case Parameter::HighShelfEnabled:
 				for (auto line : lines)
-					line->HighShelfEnabled = value >= 0.5;
+					line->HighShelfEnabled = value >= 0.5f;
 				break;
 			case Parameter::CutoffEnabled:
 				for (auto line : lines)
-					line->CutoffEnabled = value >= 0.5;
+					line->CutoffEnabled = value >= 0.5f;
 				break;
 			case Parameter::LateStageTap:
 				for (auto line : lines)
-					line->LateStageTap = value >= 0.5;
+					line->LateStageTap = value >= 0.5f;
 				break;
 
 			case Parameter::Interpolation:
 				for (auto line : lines)
-					line->SetInterpolationEnabled(value >= 0.5);
+					line->SetInterpolationEnabled(value >= 0.5f);
 				break;
 			}
 		}
 
-		void Process(float* input, int sampleCount)
+		void Process(const float* input, float* output, int len)
 		{
-			int len = sampleCount;
 			auto predelayOutput = preDelay.GetOutput();
-			auto lowPassInput = highPassEnabled ? tempBuffer : input;
 
+			const float* filtered = input;
 			if (highPassEnabled)
-				highPass.Process(input, tempBuffer, len);
-			if (lowPassEnabled)
-				lowPass.Process(lowPassInput, tempBuffer, len);
-			if (!lowPassEnabled && !highPassEnabled)
-				Utils::Copy(input, tempBuffer, len);
-
-			// completely zero if no input present
-			// Previously, the very small values were causing some really strange CPU spikes
-			for (int i = 0; i < len; i++)
 			{
-				auto n = tempBuffer[i];
-				if (n * n < 0.000000001)
-					tempBuffer[i] = 0;
+				highPass.Process(filtered, tempBuffer, len);
+				filtered = tempBuffer;
 			}
-
-			preDelay.Process(tempBuffer, len);
+			if (lowPassEnabled)
+			{
+				lowPass.Process(filtered, tempBuffer, len);
+				filtered = tempBuffer;
+			}
+			preDelay.Process(filtered, len);
 			multitap.Process(preDelay.GetOutput(), len);
 
-			auto earlyOutStage = diffuserEnabled ? diffuser.GetOutput() : multitap.GetOutput();
-
+			// The early stage feeds the lines directly, without a copy.
+			const float* early = multitap.GetOutput();
 			if (diffuserEnabled)
 			{
-				diffuser.Process(multitap.GetOutput(), len);
-				Utils::Copy(diffuser.GetOutput(), tempBuffer, len);
+				diffuser.Process(early, len);
+				early = diffuser.GetOutput();
 			}
-			else
-			{
-				Utils::Copy(multitap.GetOutput(), tempBuffer, len);
-			}
-
-			// mix in the feedback from the other channel
-			//for (int i = 0; i < len; i++)
-			//	tempBuffer[i] += crossMix[i];
-
 			for (int i = 0; i < lineCount; i++)
-				lines[i]->Process(tempBuffer, len);
+				lines[i]->Process(early, len);
 
-			for (int i = 0; i < lineCount; i++)
+			Utils::Copy(lines[0]->GetOutput(), tempBuffer, len);
+			for (int i = 1; i < lineCount; i++)
 			{
 				auto buf = lines[i]->GetOutput();
-
-				if (i == 0)
-				{
-					for (int j = 0; j < len; j++)
-						tempBuffer[j] = buf[j];
-				}
-				else
-				{
-					for (int j = 0; j < len; j++)
-						tempBuffer[j] += buf[j];
-				}
+				for (int j = 0; j < len; j++)
+					tempBuffer[j] += buf[j];
 			}
 
-			Utils::Gain(tempBuffer, perLineGain, len);
-			Utils::Copy(tempBuffer, lineOutBuffer, len);
-
+			const float lineGain = lineOut * perLineGain;
 			for (int i = 0; i < len; i++)
 			{
-				outBuffer[i] =
+				output[i] =
 					dryOut           * input[i] +
 					predelayOut      * predelayOutput[i] +
-					earlyOut         * earlyOutStage[i] +
-					lineOut          * tempBuffer[i];
+					earlyOut         * early[i] +
+					lineGain         * tempBuffer[i];
 			}
 		}
 
 		void ClearBuffers()
 		{
 			for (int i = 0; i < bufferSize; i++)
-			{
 				tempBuffer[i] = 0.0;
-				lineOutBuffer[i] = 0.0;
-				outBuffer[i] = 0.0;
-			}
 
-			lowPass.Output = 0;
-			highPass.Output = 0;
+			highPass.ClearBuffers();
+			lowPass.ClearBuffers();
 
 			preDelay.ClearBuffers();
 			multitap.ClearBuffers();
@@ -473,25 +387,24 @@ namespace CloudSeed
 			auto lateDiffusionModAmount = Ms2Samples(parameters[(int)Parameter::LateDiffusionModAmount]);
 			auto lateDiffusionModRate = parameters[(int)Parameter::LateDiffusionModRate];
 
-			int count = (int)lines.size();  // TotalLineCount; lineSeeds holds 3 values per line
+			const int count = TotalLineCount;  // lineSeeds holds 3 values per line
 
 			for (int i = 0; i < count; i++)
 			{
-				auto modAmount = lineModAmount * (0.7 + 0.3 * lineSeeds[i + count]);
-				auto modRate = lineModRate * (0.7 + 0.3 * lineSeeds[i + 2 * count]) / samplerate;
+				// The delay and its clamp stay in double: they set an integer sample count.
+				double modAmount = (double)lineModAmount * (0.7 + 0.3 * (double)lineSeeds[i + count]);
+				const float modRate = lineModRate * (0.7f + 0.3f * lineSeeds[i + 2 * count]) / samplerate;
 				
-				auto delaySamples = (0.5 + 1.0 * lineSeeds[i]) * lineDelaySamples;
-				if (delaySamples < modAmount + 2) // when the delay is set really short, and the modulation is very high
-					delaySamples = modAmount + 2; // the mod could actually take the delay time negative, prevent that! -- provide 2 extra sample as margin of safety
+				double delay = (0.5 + 1.0 * (double)lineSeeds[i]) * lineDelaySamples;
+				if (delay < modAmount + 2) // when the delay is set really short, and the modulation is very high
+					delay = modAmount + 2; // the mod could actually take the delay time negative, prevent that! -- provide 2 extra sample as margin of safety
 
-				auto dbAfter1Iteration = delaySamples / lineDecaySamples * (-60); // lineDecay is the time it takes to reach T60
-				auto gainAfter1Iteration = Utils::DB2gain(dbAfter1Iteration);
+				// lineDecay is the time it takes to reach T60
+				const float gainAfter1Iteration = Utils::DB2gain((float)delay / lineDecaySamples * -60.0f);
 
-
-
-				lines[i]->SetDelay((int)delaySamples);
+				lines[i]->SetDelay((int)delay);
 				lines[i]->SetFeedback(gainAfter1Iteration);
-				lines[i]->SetLineModAmount(modAmount);
+				lines[i]->SetLineModAmount((float)modAmount);
 				lines[i]->SetLineModRate(modRate);
 				lines[i]->SetDiffuserModAmount(lateDiffusionModAmount);
 				lines[i]->SetDiffuserModRate(lateDiffusionModRate);
@@ -500,13 +413,13 @@ namespace CloudSeed
 
 		void UpdatePostDiffusion()
 		{
-			for (size_t i = 0; i < lines.size(); i++)
-				lines[i]->SetDiffuserSeed(((long long)postDiffusionSeed) * (i + 1), crossSeed);
+			for (int i = 0; i < TotalLineCount; i++)
+				lines[i]->SetDiffuserSeed(((long long)postDiffusionSeed) * (i + 1));
 		}
 
 		float Ms2Samples(float value)
 		{
-			return value / 1000.0 * samplerate;
+			return (float)((double)value / 1000.0 * samplerate);
 		}
 
 	};

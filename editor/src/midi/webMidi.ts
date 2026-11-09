@@ -3,7 +3,7 @@
 // which Firefox has historically not fired for device hot-plug (Mozilla bug 836897).
 
 import { type MidiTransport, RebootTimeoutError } from "./client";
-import { createSysexAssembler } from "./protocol";
+import { createMidiAssembler } from "./protocol";
 
 // The pedal resets 100 ms after its reply, then spends ~2.5 s in the bootloader without a
 // MIDI port; polling earlier could find the old ports or the old firmware.
@@ -47,7 +47,7 @@ async function findPorts(): Promise<Ports | null> {
 
 export class WebMidiTransport implements MidiTransport {
   private readonly subscribers = new Set<(msg: Uint8Array) => void>();
-  private readonly feed = createSysexAssembler((msg) => {
+  private readonly feed = createMidiAssembler((msg) => {
     for (const cb of this.subscribers) cb(msg);
   });
 

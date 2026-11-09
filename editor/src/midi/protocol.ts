@@ -3,7 +3,7 @@
 
 import type { Board } from "../model/schema";
 
-export const CMD = { INFO: 1, BEGIN: 2, DATA: 3, COMMIT: 4, REVERT: 5, READ: 6, ABORT: 7, LOAD: 9 } as const;
+export const CMD = { INFO: 1, BEGIN: 2, DATA: 3, COMMIT: 4, REVERT: 5, READ: 6, ABORT: 7, LOAD: 9, DUMP: 10 } as const;
 
 export const CMD_NAMES: Record<number, string> = Object.fromEntries(
   Object.entries(CMD).map(([name, value]) => [value, name]),
@@ -147,26 +147,44 @@ export function parseIdentityReply(msg: Uint8Array): Identity | null {
 }
 
 /**
- * Reassembles SysEx messages from a MIDI byte stream: real-time bytes (F8-FF) are dropped
- * anywhere, F0 (re)starts a frame, F7 ends it, and any other status byte aborts it.
+ * Splits a MIDI byte stream into messages: SysEx F0..F7 and channel voice messages (80-EF,
+ * one data byte for Cn/Dn, two otherwise, running status kept). Real-time bytes (F8-FF) are
+ * dropped anywhere, F0 (re)starts a SysEx, any other status byte aborts one, F1-F6 also clear
+ * running status, and stray data bytes are ignored.
  */
-export function createSysexAssembler(onMessage: (msg: Uint8Array) => void): (data: Uint8Array) => void {
-  let buf: number[] | null = null;
+export function createMidiAssembler(onMessage: (msg: Uint8Array) => void): (data: Uint8Array) => void {
+  let sysex: number[] | null = null;
+  let status = 0;
+  let channel: number[] = [];
   return (data) => {
     for (const b of data) {
       if (b >= 0xf8) continue;
       if (b === 0xf0) {
-        buf = [b];
+        sysex = [b];
+        status = 0;
       } else if (b === 0xf7) {
-        if (buf) {
-          buf.push(b);
-          onMessage(Uint8Array.from(buf));
-          buf = null;
+        if (sysex) {
+          sysex.push(b);
+          onMessage(Uint8Array.from(sysex));
+          sysex = null;
         }
+      } else if (b >= 0xf1) {
+        sysex = null;
+        status = 0;
       } else if (b >= 0x80) {
-        buf = null;
-      } else if (buf) {
-        buf.push(b);
+        sysex = null;
+        status = b;
+        channel = [b];
+      } else if (sysex) {
+        sysex.push(b);
+      } else if (status) {
+        if (channel.length === 0) channel = [status];
+        channel.push(b);
+        const need = (status & 0xe0) === 0xc0 ? 2 : 3;
+        if (channel.length === need) {
+          onMessage(Uint8Array.from(channel));
+          channel = [];
+        }
       }
     }
   };

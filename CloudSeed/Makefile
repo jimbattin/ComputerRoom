@@ -105,7 +105,8 @@ CPPFLAGS += \
 -fno-exceptions \
 -ffast-math \
 -finline-functions \
--fno-aggressive-loop-optimizations
+-fno-aggressive-loop-optimizations \
+-Wdouble-promotion
 
 # default action: build all
 all: $(BUILD_DIR)/$(TARGET).a 

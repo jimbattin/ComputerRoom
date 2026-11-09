@@ -29,6 +29,10 @@
 //                   0-based index of the preset playing, so a host polling LOAD follows
 //                   preset changes made on the pedal. Not a session message. Older
 //                   firmware: BadFrame.
+//   0x0A DUMP    -> Ok, no body. Before the reply the pedal queues its complete live
+//                   state (Program Change + every control as CC and NRPN, docs/MIDI.md),
+//                   so a host holding the reply has the whole dump. Not a session
+//                   message. Older firmware: BadFrame.
 //
 // Identity Request (Universal Non-Real-Time, any device id 00-7F): F0 7E <id> 06 01 F7
 // Identity Reply: F0 7E 7F 06 02 7D 43 53 <member> 00 00 00 00 00 <build id> F7
@@ -37,10 +41,13 @@
 //   build id: 1..32 printable ASCII bytes, the short git commit at build time with "+dirty"
 //   when tracked files differed, or "unknown" outside git (Makefile, build/build_id.c).
 //
-// Host side: stop-and-wait (one frame in flight); wait up to 10 s for the COMMIT
-// reply. After Ok to COMMIT or REVERT the USB port disappears for about 3 s while
-// the pedal reboots (bootloader grace window, then the app re-enumerates). A frame
-// with a foreign header is ignored without a reply.
+// Host side: stop-and-wait (one frame in flight) so that each reply matches its
+// request; wait up to 10 s for the COMMIT reply. Received frames are queued, not
+// single-slot. The pedal also sends unsolicited CC / NRPN / Program Change messages
+// (midi_control.h) between replies; hosts skip everything that is not SysEx. After
+// Ok to COMMIT or REVERT the USB port disappears for about 3 s while the pedal reboots
+// (bootloader grace window, then the app re-enumerates). A frame with a foreign header
+// is ignored without a reply.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -52,29 +59,43 @@ constexpr uint8_t kProtocolVersion   = 1;
 
 enum class UploadStatus : uint8_t { Ok = 0, BadFrame, NoSession, BadSeq, BadLength,
                                     LengthMismatch, HashMismatch, ParseError, FlashError };
-enum class UploadAction { None, Commit, Revert, Dfu };
+enum class UploadAction { None, Commit, Revert, Dfu, Dump };
 
 // Bytewise 32-bit FNV-1a.
 uint32_t Fnv1a32(const void* data, uint32_t length);
 
-// Bytes of one SysEx frame between F0 and F7, filled from the USB interrupt.
-// Latches only frames of ours (7D 43 53 ...) or an Identity Request (7E <id> 06 01);
-// any other complete frame is dropped at its F7. Single slot: bytes arriving while a
-// frame is Ready() are dropped.
-class SysExAssembler {
+// Received MIDI from the USB interrupt, queued for the main loop. SysEx: only frames
+// of ours (7D 43 53 ...) or an Identity Request (7E <id> 06 01) are queued, as the bytes
+// between F0 and F7; any other complete frame is dropped at its F7, and so is a frame
+// longer than kMaxMessage. Channel messages (running status kept): only Bn (control
+// change) and Cn (program change) are queued, as [status, data...]; the others are
+// parsed for their length and dropped. Real-time bytes (F8-FF) are ignored anywhere;
+// F0, F1-F6 and F7 abort a partial channel message, and any status byte other than F7
+// aborts a SysEx. A message that does not fit in the free queue space is dropped whole.
+// Single producer (ISR), single consumer (main loop).
+class MidiInQueue {
 public:
-    static constexpr size_t kMaxFrame = 256;
-    void Feed(const uint8_t* data, size_t size);  // USB ISR only
-    bool Ready() const;                           // main loop
-    const uint8_t* Frame() const { return buf_; } // valid while Ready()
-    size_t Length() const { return len_; }
-    void Release();                               // main loop: slot free for the next frame
+    static constexpr size_t kMaxMessage = 256;   // SysEx bytes between F0 and F7
+    static constexpr size_t kQueueBytes = 4096;  // records: u16 length + bytes
+    void Feed(const uint8_t* data, size_t size); // USB ISR only
+    // Main loop: copies the oldest message into `out` (holds kMaxMessage) and returns
+    // its length; 0 = empty. A channel message iff out[0] & 0x80.
+    size_t Pop(uint8_t* out);
+
 private:
-    uint8_t buf_[kMaxFrame];
-    size_t  len_      = 0;
-    bool    inFrame_  = false;
+    static_assert((kQueueBytes & (kQueueBytes - 1)) == 0, "kQueueBytes must be a power of two");
+    void push(const uint8_t* msg, size_t len);
+
+    uint8_t ring_[kQueueBytes];
+    volatile size_t head_ = 0;  // free-running byte counters; written by Feed()
+    volatile size_t tail_ = 0;  // written by Pop()
+    uint8_t sysex_[kMaxMessage];
+    size_t  sysexLen_ = 0;
+    bool    inSysex_  = false;
     bool    overflow_ = false;
-    volatile bool ready_ = false;
+    uint8_t status_   = 0;  // running status, 0 = none
+    uint8_t data_[2]  = {};
+    uint8_t have_     = 0;  // data bytes received for status_
 };
 
 // Packs one complete SysEx message (starting F0, ending F7) into USB-MIDI 1.0 event

@@ -72,9 +72,13 @@ export function ParamPage({
   page,
   preset,
   changes,
-  dispatch,
+  onParam,
   onHover,
-}: PageProps & { page: PageId; onHover: (key: string | null) => void }) {
+}: Omit<PageProps, "dispatch"> & {
+  page: PageId;
+  onParam: (key: string, value: number) => void;
+  onHover: (key: string | null) => void;
+}) {
   const keys = presentKeys(PAGES.find((p) => p.id === page)!.keys, preset);
   return (
     <div class="fader-bank">
@@ -94,7 +98,7 @@ export function ParamPage({
                 ? `${formatValue(key, was, changes.original)} (${formatNorm(was)})`
                 : undefined
             }
-            onChange={(value) => dispatch({ type: "setParam", key, value })}
+            onChange={(value) => onParam(key, value)}
             onHover={onHover}
           />
         );

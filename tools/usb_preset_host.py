@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Linux test host for the pedal's USB-MIDI preset protocol (docs/USB_MIDI.md,
-src/preset_protocol.h), used by docs/HARDWARE_TESTS.md. Python 3 stdlib only: it
-talks raw MIDI bytes to the ALSA rawmidi node /dev/snd/midiC<card>D0.
+src/preset_protocol.h) and MIDI live control (docs/MIDI.md, src/midi_control.h), used by
+docs/HARDWARE_TESTS.md. Python 3 stdlib only: it talks raw MIDI bytes to the ALSA
+rawmidi node /dev/snd/midiC<card>D0.
 
   usb_preset_host.py [--dev PATH] info
   usb_preset_host.py [--dev PATH] read OUT
@@ -13,7 +14,15 @@ talks raw MIDI bytes to the ALSA rawmidi node /dev/snd/midiC<card>D0.
   usb_preset_host.py [--dev PATH] identity        # MIDI Identity Request -> build id
   usb_preset_host.py [--dev PATH] dfu             # restart into the Daisy bootloader (DFU)
   usb_preset_host.py [--dev PATH] load            # audio callback load over the last second
+  usb_preset_host.py [--dev PATH] cc NUMBER VALUE      # control change B0 n v (0..127)
+  usb_preset_host.py [--dev PATH] nrpn NUMBER VALUE14  # NRPN: CC99 0, CC98 n, CC6, CC38 (0..16383)
+  usb_preset_host.py [--dev PATH] pc PROGRAM      # program change C0 p, 0-based preset index
+  usb_preset_host.py [--dev PATH] dump            # DUMP: the pedal's full state, then DUMP: Ok
+  usb_preset_host.py [--dev PATH] monitor SECONDS # print what the pedal sends
   usb_preset_host.py fnv FILE
+
+dump and monitor print one line per received channel message: "PC p", "CC n = v", and
+"NRPN n = q" (reassembled from CC99/CC98/CC6/CC38).
 """
 import os, select, sys, time
 
@@ -50,8 +59,8 @@ def find_dev():
 
 
 class Link:
-    def __init__(self, path):
-        self.fd = os.open(path, os.O_RDWR)
+    def __init__(self, path, flags=os.O_RDWR):
+        self.fd = os.open(path, flags)
         self.buf = bytearray()
 
     def send(self, cmd, body=b""):
@@ -96,6 +105,85 @@ class Link:
 
 def show(name, st, extra=""):
     print(f"{name}: {STATUS[st] if st < len(STATUS) else st} {extra}".rstrip())
+
+
+class MidiStream:
+    """Splits a raw MIDI byte stream into ("sysex", bytes between F0 and F7) and
+    ("channel", status + data) events. Running status is kept; real-time bytes are
+    skipped."""
+
+    def __init__(self):
+        self.sysex = None
+        self.status = 0
+        self.data = []
+
+    def feed(self, data):
+        out = []
+        for b in data:
+            if b >= 0xF8:
+                continue
+            if b == 0xF0:
+                self.sysex, self.status = bytearray(), 0
+            elif b == 0xF7:
+                if self.sysex is not None:
+                    out.append(("sysex", bytes(self.sysex)))
+                self.sysex, self.status = None, 0
+            elif b & 0x80:
+                self.sysex = None
+                self.status = b if b < 0xF0 else 0
+                self.data = []
+            elif self.sysex is not None:
+                self.sysex.append(b)
+            elif self.status:
+                self.data.append(b)
+                need = 1 if (self.status & 0xF0) in (0xC0, 0xD0) else 2
+                if len(self.data) == need:
+                    out.append(("channel", bytes([self.status] + self.data)))
+                    self.data = []
+        return out
+
+
+class ChannelPrinter:
+    """Prints Program Change, plain CC and reassembled NRPN messages."""
+
+    def __init__(self):
+        self.nrpn = {}  # channel -> [msb, lsb, data msb]
+
+    def handle(self, m):
+        kind, ch = m[0] & 0xF0, m[0] & 0x0F
+        if kind == 0xC0:
+            print(f"PC {m[1]}")
+            return
+        if kind != 0xB0:
+            return
+        st = self.nrpn.setdefault(ch, [127, 127, 0])
+        n, v = m[1], m[2]
+        if n == 99:
+            st[0], st[2] = v, 0
+        elif n == 98:
+            st[1], st[2] = v, 0
+        elif n == 6:
+            st[2] = v
+        elif n == 38:
+            print(f"NRPN {st[0] << 7 | st[1]} = {st[2] << 7 | v}")
+        else:
+            print(f"CC {n} = {v}")
+
+
+def stream_events(link, timeout):
+    """Yields MidiStream events until `timeout` seconds pass; starts with whatever the
+    link has already buffered."""
+    ms = MidiStream()
+    pending = bytes(link.buf)
+    link.buf.clear()
+    end = time.monotonic() + timeout
+    while True:
+        yield from ms.feed(pending)
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        r, _, _ = select.select([link.fd], [], [], left)
+        pending = os.read(link.fd, 4096) if r else b""
 
 
 def info(link, quiet=False):
@@ -159,7 +247,11 @@ def main():
     if cmd == "fnv":
         print(f"{fnv(open(args[1], 'rb').read()):#010x}")
         return
-    link = Link(dev or find_dev())
+    # cc/nrpn/pc only write and monitor only reads: each opens one direction of the
+    # rawmidi node, so `monitor` in one shell and `pc` in another can run together.
+    flags = {"cc": os.O_WRONLY, "nrpn": os.O_WRONLY, "pc": os.O_WRONLY,
+             "monitor": os.O_RDONLY}.get(cmd, os.O_RDWR)
+    link = Link(dev or find_dev(), flags)
     if cmd == "info":
         info(link)
     elif cmd == "read":
@@ -201,6 +293,30 @@ def main():
             sys.exit(f"LOAD: {STATUS[st]}")
         print(f"LOAD: avg {g14(b) / 10:.1f}% max {g14(b[2:]) / 10:.1f}% overruns {g14(b[4:])} "
               f"currentPreset {b[6]}")
+    elif cmd == "cc":
+        n, v = int(args[1]), int(args[2])
+        os.write(link.fd, bytes([0xB0, n & 0x7F, v & 0x7F]))
+    elif cmd == "nrpn":
+        n, q = int(args[1]), int(args[2])
+        os.write(link.fd, bytes([0xB0, 99, 0, 0xB0, 98, n & 0x7F,
+                                 0xB0, 6, (q >> 7) & 0x7F, 0xB0, 38, q & 0x7F]))
+    elif cmd == "pc":
+        os.write(link.fd, bytes([0xC0, int(args[1]) & 0x7F]))
+    elif cmd == "dump":
+        link.send(0x0A)
+        printer = ChannelPrinter()
+        for kind, m in stream_events(link, 2.0):
+            if kind == "channel":
+                printer.handle(m)
+            elif m.startswith(HDR + bytes([0x4A])) and len(m) >= 5:
+                show("DUMP", m[4])
+                return
+        sys.exit("timeout waiting for the DUMP reply")
+    elif cmd == "monitor":
+        printer = ChannelPrinter()
+        for kind, m in stream_events(link, float(args[1])):
+            if kind == "channel":
+                printer.handle(m)
     else:
         sys.exit(__doc__)
 

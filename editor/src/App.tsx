@@ -7,6 +7,8 @@ import { ProgramKeys } from "./components/ProgramKeys";
 import { KnobMapPage, PageKeys, ParamPage, SetupPage, ToggleMapPage } from "./components/pages";
 import { openTomlFile, projectPresets, saveTomlFile } from "./io/files";
 import { PresetLink } from "./midi/client";
+import { qFor, sameAt14 } from "./midi/control";
+import { LiveSync } from "./midi/live";
 import { fnv1a32, type Identity, type InfoReply, type LoadReply, ProtocolError } from "./midi/protocol";
 import { connectPedal, isWebMidiSupported } from "./midi/webMidi";
 import { docText, loadBank } from "./model/bank";
@@ -23,10 +25,7 @@ interface Confirm {
 
 const pct = (done: number, total: number) => Math.floor((done * 100) / Math.max(total, 1));
 
-/**
- * How often the editor polls LOAD: the CPU meter (the pedal publishes its load once a second)
- * and the preset the pedal is playing, so a footswitch change shows up promptly.
- */
+/** How often the editor polls LOAD for the CPU meter (the pedal publishes its load once a second). */
 const LOAD_POLL_MS = 250;
 
 export function App() {
@@ -50,13 +49,17 @@ export function App() {
   const [cpuLoad, setCpuLoad] = useState<LoadReply | null>(null);
   const busyRef = useRef(false);
   busyRef.current = busy;
-  /** The pedal's current preset as last reported; a change means it was switched on the pedal. */
-  const pedalPresetRef = useRef<number | null>(null);
+  /** The pedal's bypass state as last reported over MIDI; null while unknown. */
+  const [bypassed, setBypassed] = useState<boolean | null>(null);
+  const liveSyncRef = useRef<LiveSync | null>(null);
+  /** Whether the pedal's live reports may patch the doc: live and no operation running. */
+  const liveRef = useRef(false);
+  /** The link and epoch last pulled with DUMP, so each doc that becomes the pedal's bank is pulled once. */
+  const pulledRef = useRef<{ link: PresetLink; epoch: number } | null>(null);
 
-  // Poll LOAD while linked and idle, for the CPU meter and the pedal's current preset.
-  // PresetLink queues requests, so a poll in flight when an operation starts only delays that
-  // operation's first request. Firmware without LOAD (BadFrame) or a lost reply leaves the
-  // meter dimmed.
+  // Poll LOAD while linked and idle, for the CPU meter. PresetLink queues requests, so a poll in
+  // flight when an operation starts only delays that operation's first request. Firmware without
+  // LOAD (BadFrame) or a lost reply leaves the meter dimmed.
   useEffect(() => {
     setCpuLoad(null);
     if (!connected || !link) return;
@@ -89,16 +92,66 @@ export function App() {
     [doc, info],
   );
 
-  // Follow preset changes made on the pedal (footswitch), but only while the editor holds the
-  // pedal's bank: a different bank's preset N is not what the pedal plays. Selecting a preset in
-  // the editor does not change the pedal's report, so it is never undone by the next poll.
-  const pedalPreset = cpuLoad?.currentPreset ?? null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to the pedal's report only
+  const live = connected && !!link && !!info && state.pedalHash !== null && state.pedalHash === info.activeHash;
+  liveRef.current = live && !busy;
+
+  // The live link to the pedal: its reports patch the doc only while live and idle.
   useEffect(() => {
-    if (pedalPreset === null || pedalPreset === pedalPresetRef.current) return;
-    pedalPresetRef.current = pedalPreset;
-    if (state.source === "pedal" || inSync) dispatch({ type: "select", preset: pedalPreset });
-  }, [pedalPreset]);
+    if (!link || !identity) return;
+    const sync = new LiveSync(link, identity.board, {
+      onPedalPreset: (preset) => liveRef.current && dispatch({ type: "pedalPreset", preset }),
+      onPedalControl: (preset, key, q) => liveRef.current && dispatch({ type: "liveParam", preset, key, q }),
+      onBypass: setBypassed,
+    });
+    liveSyncRef.current = sync;
+    return () => {
+      sync.dispose();
+      if (liveSyncRef.current === sync) liveSyncRef.current = null;
+    };
+  }, [link, identity]);
+
+  // A doc identical to the pedal's bank (a successful UPLOAD, or an opened file) is the pedal's bank.
+  useEffect(() => {
+    if (connected && inSync && info) dispatch({ type: "pedalBank", hash: info.activeHash });
+  }, [connected, inSync, info]);
+
+  // Pull the pedal's full state once per link and doc epoch. Firmware without DUMP answers
+  // BadFrame, and live updates then simply do not arrive.
+  useEffect(() => {
+    if (!connected || !link || busy) return;
+    const pulled = pulledRef.current;
+    if (pulled && pulled.link === link && pulled.epoch === state.pedalEpoch) return;
+    pulledRef.current = { link, epoch: state.pedalEpoch };
+    void liveSyncRef.current?.pull().catch(() => {});
+  }, [connected, link, busy, state.pedalEpoch]);
+
+  function onParam(key: string, value: number) {
+    const sync = liveSyncRef.current;
+    if (live && !busy && sync && preset && sync.pedalPreset === selected) {
+      const q = qFor(key, value);
+      const current = preset.params[key];
+      if (current !== undefined && sameAt14(key, current, q)) return;
+      dispatch({ type: "liveParam", preset: selected, key, q });
+      sync.sendParam(key, q);
+    } else {
+      dispatch({ type: "setParam", key, value });
+    }
+  }
+
+  function onSelect(i: number) {
+    dispatch({ type: "select", preset: i });
+    const sync = liveSyncRef.current;
+    const target = presets[i];
+    if (live && !busy && sync && target && i !== selected) {
+      sync.selectPreset(i, target.params).catch((e) => setStatus(e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  function onBypass() {
+    const next = !bypassed;
+    setBypassed(next);
+    liveSyncRef.current?.setBypass(next);
+  }
 
   useEffect(() => {
     if (!dirty) return;
@@ -133,8 +186,8 @@ export function App() {
 
   const discardOk = () => (dirty ? ask("Unsaved edits", "Discard unsaved edits?", "Discard") : Promise.resolve(true));
 
-  const load = (text: string, source: Source, fileName: string | null, board?: Board) =>
-    dispatch({ type: "load", text, source, fileName, board });
+  const load = (text: string, source: Source, fileName: string | null, board?: Board, pedalHash?: number) =>
+    dispatch({ type: "load", text, source, fileName, board, pedalHash });
 
   /** The linked pedal's board; null while no pedal is linked. */
   const pedalBoard = connected && identity ? identity.board : null;
@@ -190,6 +243,7 @@ export function App() {
     setConnected(false);
     setInfo(null);
     setIdentity(null);
+    setBypassed(null);
     const next = new PresetLink(await connectPedal());
     const id = await next.identify();
     setInfo(await next.info());
@@ -208,14 +262,11 @@ export function App() {
   /** READs the bank the pedal is playing and opens it on the preset that is playing. */
   async function readPedal(from: PresetLink, board: Board | undefined) {
     const text = await from.readAll((d, t) => setStatus(`READ ${pct(d, t)}%`));
-    load(text, "pedal", null, board);
+    load(text, "pedal", null, board, fnv1a32(new TextEncoder().encode(text)));
     const after = await from.info();
     setInfo(after);
     // Firmware from before INFO carried currentPreset leaves the first preset selected.
-    if (after.currentPreset !== null) {
-      pedalPresetRef.current = after.currentPreset;
-      dispatch({ type: "select", preset: after.currentPreset });
-    }
+    if (after.currentPreset !== null) dispatch({ type: "select", preset: after.currentPreset });
     setStatus(null);
   }
 
@@ -312,6 +363,9 @@ export function App() {
           info={info}
           identity={connected ? identity : null}
           inSync={inSync}
+          live={live}
+          bypassed={connected ? bypassed : null}
+          onBypass={onBypass}
           onConnect={onConnect}
           onRead={onRead}
           onUpload={onUpload}
@@ -343,7 +397,7 @@ export function App() {
               presets={presets}
               changes={changes}
               selected={selected}
-              onSelect={(i) => dispatch({ type: "select", preset: i })}
+              onSelect={onSelect}
               onDuplicate={() => dispatch({ type: "duplicate" })}
               onDelete={() => dispatch({ type: "delete" })}
             />
@@ -379,7 +433,7 @@ export function App() {
                   page={page}
                   preset={preset}
                   changes={selectedChanges}
-                  dispatch={dispatch}
+                  onParam={onParam}
                   onHover={setFocusKey}
                 />
               )}

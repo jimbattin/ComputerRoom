@@ -1,5 +1,5 @@
 // Host tests for KnobBank (src/knob_bank.h): parking, move threshold, takeover
-// glide, apply epsilon, rails, bank change, and reset during a glide.
+// glide, apply epsilon, rails, bank change, reset during a glide, and Repark().
 #include <math.h>
 
 #include "check.h"
@@ -79,6 +79,34 @@ int main() {
         kb.Scan(1, false, pos, cur, w);
     CHECK(kb.Scan(1, true, pos, cur, w) == 0);
     CHECK(kb.Scan(1, false, pos, cur, w) == 0);
+
+    // Repark(): an external (MIDI) write parks one knob; the others stay live.
+    {
+        KnobBank rb;
+        for (int i = 0; i < kKnobCount; i++) {
+            pos[i] = 0.5f;
+            cur[i] = 0.2f;
+        }
+        CHECK(rb.Scan(0, false, pos, cur, w) == 0);
+        pos[0] = 0.6f;
+        pos[1] = 0.6f;
+        for (int i = 0; i < kKnobGlideBlocks + 1; i++)  // both knobs live, glides done
+            rb.Scan(0, false, pos, cur, w);
+        CHECK(rb.Scan(0, false, pos, cur, w) == 0);
+
+        rb.Repark(0);
+        cur[0] = 0.9f;  // the MIDI write
+        CHECK(rb.Scan(0, false, pos, cur, w) == 0);
+        pos[1] = 0.7f;  // knob 1 is still live
+        n = rb.Scan(0, false, pos, cur, w);
+        CHECK(n == 1 && w[0].knob == 1 && w[0].value == 0.7f);
+
+        // Knob 0 takes over again and glides from the written value.
+        pos[0] = 0.62f;
+        n = rb.Scan(0, false, pos, cur, w);
+        CHECK(n == 1 && w[0].knob == 0);
+        CHECK(fabsf(w[0].value - (0.9f + (0.62f - 0.9f) / (float)kKnobGlideBlocks)) < 1e-6f);
+    }
 
     return CheckSummary("knob_bank_test");
 }
