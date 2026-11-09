@@ -9,11 +9,13 @@ constexpr uint32_t PresetProtocol::kMaxTextBytes;
 constexpr uint32_t PresetProtocol::kChunkBytes;
 constexpr uint32_t PresetProtocol::kSessionTimeoutMs;
 constexpr size_t   PresetProtocol::kMaxReply;
+constexpr size_t   PresetProtocol::kMaxBuildId;
 
 namespace {
 
 constexpr uint8_t kCmdInfo = 0x01, kCmdBegin = 0x02, kCmdData = 0x03, kCmdCommit = 0x04,
-                  kCmdRevert = 0x05, kCmdRead = 0x06, kCmdAbort = 0x07;
+                  kCmdRevert = 0x05, kCmdRead = 0x06, kCmdAbort = 0x07, kCmdDfu = 0x08,
+                  kCmdLoad = 0x09;
 constexpr uint8_t kReplyFlag  = 0x40;
 constexpr size_t  kHeaderLen  = 4;    // 7D 43 53 <cmd>
 constexpr size_t  kMaxErrText = 200;  // ParseError body cap
@@ -22,6 +24,15 @@ uint32_t getU14(const uint8_t* p) { return p[0] | (uint32_t)p[1] << 7; }
 uint32_t getU21(const uint8_t* p) { return getU14(p) | (uint32_t)p[2] << 14; }
 uint32_t getU32(const uint8_t* p) {
     return getU21(p) | (uint32_t)p[3] << 21 | (uint32_t)(p[4] & 0x0F) << 28;
+}
+
+// Frames Handle() can answer: our header (7D 43 53 <cmd> ...) or a Universal
+// Non-Real-Time Identity Request (7E <id> 06 01). Hosts may send several devices'
+// frames back to back in one USB transfer; latching only these keeps ours from
+// being dropped behind a foreign frame that would otherwise occupy the slot.
+bool latchable(const uint8_t* f, size_t n) {
+    return (n >= kHeaderLen && f[0] == kSysExManufacturer && f[1] == kSysExTag0 && f[2] == kSysExTag1)
+           || (n == 4 && f[0] == 0x7E && f[2] == 0x06 && f[3] == 0x01);
 }
 
 }  // namespace
@@ -48,7 +59,7 @@ void SysExAssembler::Feed(const uint8_t* data, size_t size) {
         if (b == 0xF0) {
             inFrame_ = true; len_ = 0; overflow_ = false;
         } else if (b == 0xF7) {
-            if (inFrame_ && !overflow_) {
+            if (inFrame_ && !overflow_ && latchable(buf_, len_)) {
                 std::atomic_signal_fence(std::memory_order_seq_cst);
                 ready_ = true;
             }
@@ -97,10 +108,13 @@ size_t PackSysExUsbMidi(const uint8_t* msg, size_t len, uint8_t* out, size_t out
  * PresetProtocol
  */
 
-void PresetProtocol::Init(char* rxBuffer, BankValidator validate, const ActiveBank& active) {
+void PresetProtocol::Init(char* rxBuffer, BankValidator validate, const ActiveBank& active,
+                          const char* buildId, uint8_t board) {
     rx_       = rxBuffer;
     validate_ = validate;
     active_   = active;
+    buildId_  = buildId;
+    board_    = board & 0x7F;
     session_  = false;
     replyLen_ = 0;
 }
@@ -120,6 +134,21 @@ void PresetProtocol::endReply() { put(0xF7); }
 
 UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t nowMs) {
     replyLen_ = 0;
+    if (len == 4 && frame[0] == 0x7E && frame[2] == 0x06 && frame[3] == 0x01) {
+        // Identity Reply. Not a session message: the session timer is untouched.
+        static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, kSysExManufacturer,
+                                        kSysExTag0, kSysExTag1};
+        for (uint8_t b : kHead) put(b);
+        put(board_);  // member, LSB first
+        for (int i = 0; i < 5; i++) put(0x00);  // member MSB, version
+        size_t n = 0;
+        for (const char* p = buildId_; p && *p && n < kMaxBuildId; ++p, ++n)
+            put(*p >= 0x20 && *p <= 0x7E ? static_cast<uint8_t>(*p) : '?');
+        if (n == 0)
+            for (const char* p = "unknown"; *p; ++p) put(static_cast<uint8_t>(*p));
+        endReply();
+        return UploadAction::None;
+    }
     if (len < kHeaderLen || frame[0] != kSysExManufacturer || frame[1] != kSysExTag0 ||
         frame[2] != kSysExTag1)
         return UploadAction::None;  // not ours: no reply
@@ -139,6 +168,7 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         putU21(active_.length);
         putU32(active_.hash);
         put(static_cast<uint8_t>(active_.presetCount & 0x7F));
+        put(static_cast<uint8_t>(currentPreset_ & 0x7F));
         endReply();
         return UploadAction::None;
 
@@ -241,6 +271,22 @@ UploadAction PresetProtocol::Handle(const uint8_t* frame, size_t len, uint32_t n
         if (n != 0) break;
         session_ = false;
         reply(cmd, UploadStatus::Ok);
+        return UploadAction::None;
+
+    case kCmdDfu:
+        // The caller resets into the bootloader after sending Ok; the session is moot.
+        if (n != 0) break;
+        reply(cmd, UploadStatus::Ok);
+        return UploadAction::Dfu;
+
+    case kCmdLoad:
+        if (n != 0) break;
+        beginReply(cmd, UploadStatus::Ok);
+        putU14(load_.avgPermille);
+        putU14(load_.maxPermille);
+        putU14(load_.overruns);
+        put(static_cast<uint8_t>(currentPreset_ & 0x7F));
+        endReply();
         return UploadAction::None;
 
     default:

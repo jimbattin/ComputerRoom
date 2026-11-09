@@ -2,8 +2,8 @@
 // the pedal reboots polls requestMIDIAccess() instead of relying on MIDIAccess.onstatechange,
 // which Firefox has historically not fired for device hot-plug (Mozilla bug 836897).
 
-import { RebootTimeoutError, type MidiTransport } from './client';
-import { createSysexAssembler } from './protocol';
+import { type MidiTransport, RebootTimeoutError } from "./client";
+import { createSysexAssembler } from "./protocol";
 
 // The pedal resets 100 ms after its reply, then spends ~2.5 s in the bootloader without a
 // MIDI port; polling earlier could find the old ports or the old firmware.
@@ -15,7 +15,7 @@ const REOPEN_SETTLE_MS = 300;
 // Bound on one reboot poll (list + open), and on opening the ports at CONNECT.
 const POLL_ATTEMPT_MS = 2000;
 const CONNECT_TIMEOUT_MS = 5000;
-const NOT_FOUND = 'pedal not found: check the USB cable, then reload the page';
+const NOT_FOUND = "pedal not found: check the USB cable, then reload the page";
 
 function sleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -24,9 +24,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 export const isWebMidiSupported = (): boolean =>
-  typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function';
+  typeof navigator !== "undefined" && typeof navigator.requestMIDIAccess === "function";
 
-const isDaisy = (port: MIDIPort) => /daisy/i.test(port.name ?? '') || /daisy/i.test(port.manufacturer ?? '');
+const isDaisy = (port: MIDIPort) => /daisy/i.test(port.name ?? "") || /daisy/i.test(port.manufacturer ?? "");
 
 interface Ports {
   input: MIDIInput;
@@ -38,16 +38,18 @@ async function findPorts(): Promise<Ports | null> {
   try {
     access = await navigator.requestMIDIAccess({ sysex: true });
   } catch {
-    throw new Error('MIDI access denied');
+    throw new Error("MIDI access denied");
   }
-  const input = [...access.inputs.values()].find((p) => isDaisy(p) && p.state === 'connected');
-  const output = [...access.outputs.values()].find((p) => isDaisy(p) && p.state === 'connected');
+  const input = [...access.inputs.values()].find((p) => isDaisy(p) && p.state === "connected");
+  const output = [...access.outputs.values()].find((p) => isDaisy(p) && p.state === "connected");
   return input && output ? { input, output } : null;
 }
 
 export class WebMidiTransport implements MidiTransport {
   private readonly subscribers = new Set<(msg: Uint8Array) => void>();
-  private readonly feed = createSysexAssembler((msg) => this.subscribers.forEach((cb) => cb(msg)));
+  private readonly feed = createSysexAssembler((msg) => {
+    for (const cb of this.subscribers) cb(msg);
+  });
 
   constructor(private ports: Ports) {
     this.attach();
@@ -63,7 +65,7 @@ export class WebMidiTransport implements MidiTransport {
     try {
       this.ports.output.send(msg);
     } catch {
-      throw new Error('pedal disconnected');
+      throw new Error("pedal disconnected");
     }
   }
 
@@ -89,7 +91,7 @@ export class WebMidiTransport implements MidiTransport {
       }
       await sleep(REBOOT_POLL_MS);
     }
-    throw new RebootTimeoutError('pedal did not come back after reboot');
+    throw new RebootTimeoutError("pedal did not come back after reboot");
   }
 }
 

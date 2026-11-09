@@ -1,21 +1,26 @@
 import {
+  buildFrame,
   CMD,
   CMD_NAMES,
-  STATUS_NAMES,
-  STATUS_PARSE_ERROR,
-  ProtocolError,
-  buildFrame,
   decodeInfo,
+  decodeLoad,
   fnv1a32,
   getU14,
   getU21,
+  IDENTITY_REQUEST,
+  type Identity,
+  type InfoReply,
+  type LoadReply,
+  ProtocolError,
+  parseIdentityReply,
   parseReply,
+  type Reply,
+  STATUS_NAMES,
+  STATUS_PARSE_ERROR,
   u14,
   u21,
   u32,
-  type InfoReply,
-  type Reply,
-} from './protocol';
+} from "./protocol";
 
 export interface MidiTransport {
   send(msg: Uint8Array): void;
@@ -27,7 +32,7 @@ export interface MidiTransport {
 export class RebootTimeoutError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'RebootTimeoutError';
+    this.name = "RebootTimeoutError";
   }
 }
 
@@ -39,11 +44,16 @@ export interface LinkOptions {
 
 export type Progress = (done: number, total: number) => void;
 
-/** Stop-and-wait client for protocol v1: one request in flight at a time. */
+/**
+ * Stop-and-wait client for protocol v1: one request in flight at a time. Requests are queued,
+ * so the periodic LOAD poll can never overlap another operation's request (the pedal latches
+ * one frame at a time and would drop the second).
+ */
 export class PresetLink {
   private readonly replyTimeoutMs: number;
   private readonly commitTimeoutMs: number;
   private readonly revertTimeoutMs: number;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly transport: MidiTransport,
@@ -54,11 +64,18 @@ export class PresetLink {
     this.revertTimeoutMs = opts.revertTimeoutMs ?? 5000;
   }
 
+  /** Queues one request behind any in flight; see send(). */
+  private call(cmd: number, body: number[] = [], timeoutMs = this.replyTimeoutMs): Promise<Reply> {
+    const next = this.queue.then(() => this.send(cmd, body, timeoutMs));
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
   /**
    * Sends one request and resolves with its reply. DATA and READ replies must echo the
    * request's seq/index, so a late reply to an earlier resend is never taken for this one.
    */
-  private async call(cmd: number, body: number[] = [], timeoutMs = this.replyTimeoutMs): Promise<Reply> {
+  private async send(cmd: number, body: number[], timeoutMs: number): Promise<Reply> {
     const name = CMD_NAMES[cmd];
     const echo = cmd === CMD.DATA || cmd === CMD.READ ? getU14(body, 0) : null;
     // INFO, READ and DATA are answered identically when repeated (docs/USB_MIDI.md section 10).
@@ -90,7 +107,7 @@ export class PresetLink {
       if (!reply) continue;
       if (reply.status !== 0) {
         const status = STATUS_NAMES[reply.status] ?? `status ${reply.status}`;
-        const detail = reply.status === STATUS_PARSE_ERROR ? `: ${String.fromCharCode(...reply.body)}` : '';
+        const detail = reply.status === STATUS_PARSE_ERROR ? `: ${String.fromCharCode(...reply.body)}` : "";
         throw new ProtocolError(`${name}: ${status}${detail}`, reply.status);
       }
       return reply;
@@ -98,8 +115,40 @@ export class PresetLink {
     throw new ProtocolError(`${name}: no reply`);
   }
 
+  /**
+   * The pedal's board and build id from the MIDI Identity Reply. A pedal that does not answer
+   * (firmware without the Identity Reply) is a Terrarium with an unknown build.
+   */
+  async identify(): Promise<Identity> {
+    const { promise, resolve } = Promise.withResolvers<Identity | null>();
+    const unsubscribe = this.transport.subscribe((msg) => {
+      const id = parseIdentityReply(msg);
+      if (!id) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(id);
+    });
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve(null);
+    }, this.replyTimeoutMs);
+    try {
+      this.transport.send(IDENTITY_REQUEST);
+    } catch (e) {
+      clearTimeout(timer);
+      unsubscribe();
+      throw e;
+    }
+    return (await promise) ?? { board: "terrarium", buildId: "unknown" };
+  }
+
   async info(): Promise<InfoReply> {
     return decodeInfo((await this.call(CMD.INFO)).body);
+  }
+
+  /** The audio callback's load over the last second; firmware without LOAD replies BadFrame. */
+  async load(): Promise<LoadReply> {
+    return decodeLoad((await this.call(CMD.LOAD)).body);
   }
 
   /** The active bank's text, checked against INFO's activeHash. */
@@ -111,7 +160,7 @@ export class PresetLink {
       const { body } = await this.call(CMD.READ, u14(index));
       total = getU21(body, 2);
       const data = body.slice(5);
-      if (data.length === 0 && received < total) throw new ProtocolError('READ: empty chunk');
+      if (data.length === 0 && received < total) throw new ProtocolError("READ: empty chunk");
       chunks.push(data);
       received += data.length;
       onProgress?.(Math.min(received, total), total);
@@ -123,8 +172,8 @@ export class PresetLink {
       off += c.length;
     }
     const info = await this.info();
-    if (fnv1a32(bytes) !== info.activeHash) throw new ProtocolError('READ: hash mismatch');
-    return new TextDecoder('ascii').decode(bytes);
+    if (fnv1a32(bytes) !== info.activeHash) throw new ProtocolError("READ: hash mismatch");
+    return new TextDecoder("ascii").decode(bytes);
   }
 
   /**
@@ -159,7 +208,7 @@ export class PresetLink {
     const after = await this.afterReboot();
     if (!after) return null;
     if (after.source !== 1 || after.activeHash !== hash) {
-      throw new ProtocolError('pedal did not activate the upload');
+      throw new ProtocolError("pedal did not activate the upload");
     }
     return after;
   }
@@ -169,7 +218,7 @@ export class PresetLink {
     await this.call(CMD.REVERT, [], this.revertTimeoutMs);
     const after = await this.afterReboot();
     if (!after) return null;
-    if (after.source !== 0) throw new ProtocolError('pedal did not revert');
+    if (after.source !== 0) throw new ProtocolError("pedal did not revert");
     return after;
   }
 

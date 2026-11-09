@@ -1,6 +1,6 @@
-// Host tests for ParsePresetBank / ParsePresetBankText (src/preset_bank.cpp) against a
-// fixture that is independent of the live presets.toml: the baseline parses, and each
-// mutation is rejected (or accepted) with the expected message.
+// Host tests for ParsePresetBank / ParsePresetBankText (src/preset_bank.cpp) against
+// fixtures that are independent of the live banks: each board's baseline parses, and
+// each mutation is rejected (or accepted) with the expected message.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,11 +35,11 @@ static void* failingAlloc(size_t) { return nullptr; }
 
 static PresetBank gBank;  // 4.8 KB
 
-static bool Parse(std::string t, PresetBank& b, std::string& err) {
+static bool Parse(std::string t, Board board, PresetBank& b, std::string& err) {
     std::vector<char> buf(t.begin(), t.end());
     buf.push_back('\0');
     char errBuf[256] = {};
-    const bool ok = ParsePresetBank(buf.data(), b, errBuf, sizeof errBuf, malloc, free);
+    const bool ok = ParsePresetBank(buf.data(), board, b, errBuf, sizeof errBuf, malloc, free);
     err = errBuf;
     return ok;
 }
@@ -79,13 +79,23 @@ static const Reject kRejects[] = {
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"output.DryOut\"", 1,
      "toggle_map: toggle1_a: 'DryOut' is not an on/off parameter"},
     {"toggle2_b = \"early.Bloom\"", "toggle2_b = \"reverse.delay\"", 1,
-     "'reverse' toggles only 'enabled' or 'direct_mix'"},
+     "'reverse' toggles only 'enabled', 'direct_mix' or 'mode'"},
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"late.LineCount\"", 1,
      "runtime-controlled"},
     {"toggle3_a = \"reverse.enabled\"", "toggle3_a = \"late_eq.HiPassEnabled\"", 1,
      "is not in group 'late_eq'"},
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"delay_lines.min\"", 1,
-     "'delay_lines' has only 'max'"},
+     "'delay_lines' toggles only 'max' or 'select'"},
+    // A two-position switch cannot reach a middle position.
+    {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"delay_lines.select\"", 1,
+     "toggle1_a: 'delay_lines.select' needs a three-position toggle"},
+    {"toggle2_a = \"early.Bloom\"", "toggle2_a = \"early.envelope\"", 1,
+     "'early.envelope' needs a three-position toggle"},
+    {"toggle3_b = \"reverse.enabled\"", "toggle3_b = \"reverse.mode\"", 1,
+     "'reverse.mode' needs a three-position toggle"},
+    {"max = 0.0", "select = 0.5", 1, "[preset.params.delay_lines]: unknown key 'select'"},
+    {"ScatterDepth = 0.5\n", "", 1, "missing parameter 'ScatterDepth'"},
+    {"ScatterRate  = 0.5", "ScatterRate  = 1.5", 1, "'ScatterRate' = 1.5 out of range 0..1"},
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"nogroup\"", 1,
      "must be \"group.Parameter\""},
     {"toggle4_b = \"reverse.direct_mix\"\n", "", 1,
@@ -122,6 +132,35 @@ static const Reject kRejects[] = {
     {"[preset.knob_map]", "[preset.knob_map]  # \xE2\x80\x94", 1, "non-ASCII byte 0xE2"},
 };
 
+// Root-level `board` rules, applied to the start of the document (Mutate() only sees
+// text from the first [[preset]] on).
+struct BoardReject {
+    const char* from;
+    const char* to;
+    const char* expected;
+};
+
+static const BoardReject kTerrariumBoardRejects[] = {
+    {"board = \"terrarium\"\n", "", "missing board = \"terrarium\""},
+    {"board = \"terrarium\"", "board = \"hothouse\"",
+     "bank is for board \"hothouse\", this pedal is \"terrarium\""},
+    {"board = \"terrarium\"", "board = \"petal\"", "board 'petal' is not \"terrarium\" or \"hothouse\""},
+    {"board = \"terrarium\"", "board = 1", "missing board = \"terrarium\""},
+};
+
+// HotHouse fixture: three three-position toggles.
+static const Reject kHotHouseRejects[] = {
+    {"toggle3_b = \"reverse.mode\"\n", "toggle3_b = \"reverse.mode\"\ntoggle4_a = \"early.Bloom\"\n", 1,
+     "[preset.toggle_map]: unknown key 'toggle4_a'"},
+    {"toggle3_b = \"reverse.mode\"\n", "", 1, "toggle_map: missing or non-string 'toggle3_b'"},
+    {"select = 0.5", "select = 0.3", 1, "preset 0: 'delay_lines.select' must be 0, 0.5 or 1"},
+    {"select = 0.5", "max = 0.0", 1, "[preset.params.delay_lines]: unknown key 'max'"},
+    {"toggle2_a = \"early.envelope\"", "toggle2_a = \"early.Envelope\"", 1,
+     "unknown parameter 'Envelope'"},
+    {"toggle2_a = \"early.envelope\"", "toggle2_a = \"late.LineDecay\"", 1,
+     "'LineDecay' is not an on/off parameter"},
+};
+
 struct Accept {
     const char* from;
     const char* to;
@@ -130,47 +169,123 @@ struct Accept {
 static const Accept kAccepts[] = {
     {"toggle1_a = \"delay_lines.max\"", "toggle1_a = \"early_diffusion.DiffusionStages\""},
     {"toggle2_a = \"early.Bloom\"", "toggle2_a = \"late.Interpolation\""},
+    {"toggle2_a = \"early.Bloom\"", "toggle2_a = \"early.Scatter\""},
 };
 
-int main(int argc, char** argv) {
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s tests/fixtures/two_presets.toml\n", argv[0]);
-        return 2;
-    }
-    const std::string base = ReadFile(argv[1]);
-    CHECK(!base.empty());
+// On/off targets stay assignable on a three-position toggle.
+static const Accept kHotHouseAccepts[] = {
+    {"toggle1_a = \"delay_lines.select\"", "toggle1_a = \"delay_lines.max\""},
+    {"toggle2_a = \"early.envelope\"", "toggle2_a = \"early.Bloom\""},
+    {"toggle3_a = \"reverse.mode\"", "toggle3_a = \"reverse.direct_mix\""},
+};
 
+static void checkRejects(const std::string& base, Board board, const Reject* rejects, size_t n) {
     std::string err;
-    CHECK(Parse(base, gBank, err));
-    CHECK(gBank.count == 2);
-    CHECK(gBank.presets[1].maxDelayLines == 4.0f);
-    CHECK(gBank.presets[0].toggleMap[0][0].kind == ToggleTarget_DelayLinesMax);
-    CHECK(gBank.presets[0].knobMap[1][5].kind == KnobTarget_ReverseDelay);
-
-    for (const Reject& r : kRejects) {
+    for (size_t i = 0; i < n; i++) {
+        const Reject& r = rejects[i];
         std::string t = base;
         CHECK(Mutate(t, r.from, r.to, r.nth));
-        const bool ok = Parse(t, gBank, err);
+        const bool ok = Parse(t, board, gBank, err);
         CHECK(!ok);
         CHECK(err.find(r.expected) != std::string::npos);
         if (ok || err.find(r.expected) == std::string::npos)
             fprintf(stderr, "  expected '%s', got '%s'\n", r.expected, err.c_str());
     }
+}
 
-    for (const Accept& a : kAccepts) {
+static void checkAccepts(const std::string& base, Board board, const Accept* accepts, size_t n) {
+    std::string err;
+    for (size_t i = 0; i < n; i++) {
         std::string t = base;
-        CHECK(Mutate(t, a.from, a.to));
-        const bool ok = Parse(t, gBank, err);
+        CHECK(Mutate(t, accepts[i].from, accepts[i].to));
+        const bool ok = Parse(t, board, gBank, err);
         CHECK(ok);
         if (!ok)
             fprintf(stderr, "  unexpected rejection: '%s'\n", err.c_str());
     }
+}
+
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        fprintf(stderr,
+                "usage: %s tests/fixtures/two_presets.toml "
+                "tests/fixtures/two_presets_hothouse.toml\n",
+                argv[0]);
+        return 2;
+    }
+    const std::string base = ReadFile(argv[1]);
+    const std::string hhBase = ReadFile(argv[2]);
+    CHECK(!base.empty());
+    CHECK(!hhBase.empty());
+
+    std::string err;
+    CHECK(Parse(base, Board_Terrarium, gBank, err));
+    CHECK(gBank.count == 2);
+    CHECK(gBank.board == Board_Terrarium);
+    CHECK(gBank.presets[1].maxDelayLines == 4.0f);
+    CHECK(gBank.presets[0].delayLines == DelayLines_Default);
+    CHECK(gBank.presets[0].toggleMap[0][0].kind == ToggleTarget_DelayLinesMax);
+    CHECK(gBank.presets[0].knobMap[1][5].kind == KnobTarget_ReverseDelay);
+    CHECK(gBank.presets[0].params[(int)Parameter::ScatterRate] == 0.5f);
+
+    checkRejects(base, Board_Terrarium, kRejects, sizeof kRejects / sizeof kRejects[0]);
+    checkAccepts(base, Board_Terrarium, kAccepts, sizeof kAccepts / sizeof kAccepts[0]);
+
+    // delay_lines.max >= 0.5 stores Max on a Terrarium.
+    {
+        std::string t = base;
+        CHECK(Mutate(t, "max = 0.0", "max = 1.0"));
+        CHECK(Parse(t, Board_Terrarium, gBank, err));
+        CHECK(gBank.presets[0].delayLines == DelayLines_Max);
+    }
+
+    for (const BoardReject& r : kTerrariumBoardRejects) {
+        std::string t = base;
+        const size_t at = t.find(r.from);
+        CHECK(at != std::string::npos);
+        t.replace(at, strlen(r.from), r.to);
+        CHECK(!Parse(t, Board_Terrarium, gBank, err));
+        CHECK(err == r.expected);
+        if (err != r.expected)
+            fprintf(stderr, "  expected '%s', got '%s'\n", r.expected, err.c_str());
+    }
+
+    // Each board rejects the other's bank by its board key, before any schema error.
+    CHECK(!Parse(base, Board_HotHouse, gBank, err));
+    CHECK(err == "bank is for board \"terrarium\", this pedal is \"hothouse\"");
+    CHECK(!Parse(hhBase, Board_Terrarium, gBank, err));
+    CHECK(err == "bank is for board \"hothouse\", this pedal is \"terrarium\"");
+
+    // HotHouse: three toggles, three-position targets, delay_lines.select.
+    CHECK(Parse(hhBase, Board_HotHouse, gBank, err));
+    CHECK(gBank.count == 2);
+    CHECK(gBank.board == Board_HotHouse);
+    CHECK(gBank.presets[0].toggleMap[0][0].kind == ToggleTarget_DelayLinesSelect);
+    CHECK(gBank.presets[0].toggleMap[1][1].kind == ToggleTarget_EarlyEnvelope);
+    CHECK(gBank.presets[0].toggleMap[0][2].kind == ToggleTarget_ReverseMode);
+    CHECK(gBank.presets[0].toggleMap[0][3].kind == ToggleTarget_Param
+          && gBank.presets[0].toggleMap[0][3].paramIndex == 0);
+    CHECK(gBank.presets[0].delayLines == DelayLines_Default);
+    {
+        std::string t = hhBase;
+        CHECK(Mutate(t, "select = 0.5", "select = 0.0"));
+        CHECK(Parse(t, Board_HotHouse, gBank, err));
+        CHECK(gBank.presets[0].delayLines == DelayLines_One);
+        t = hhBase;
+        CHECK(Mutate(t, "select = 0.5", "select = 1"));
+        CHECK(Parse(t, Board_HotHouse, gBank, err));
+        CHECK(gBank.presets[0].delayLines == DelayLines_Max);
+    }
+    checkRejects(hhBase, Board_HotHouse, kHotHouseRejects,
+                 sizeof kHotHouseRejects / sizeof kHotHouseRejects[0]);
+    checkAccepts(hhBase, Board_HotHouse, kHotHouseAccepts,
+                 sizeof kHotHouseAccepts / sizeof kHotHouseAccepts[0]);
 
     // A float LED timing is honoured, not silently replaced by the default.
     {
         std::string t = base;
         CHECK(Mutate(t, "led_on_ms = 150", "led_on_ms = 300.0"));
-        CHECK(Parse(t, gBank, err));
+        CHECK(Parse(t, Board_Terrarium, gBank, err));
         CHECK(gBank.presets[0].onDurationMs == 300);
     }
 
@@ -179,7 +294,7 @@ int main(int argc, char** argv) {
         const char* longest = "0123456789012345678901234567890";
         std::string t = base;
         CHECK(Mutate(t, "name = \"Chorus\"", "name = \"0123456789012345678901234567890\""));
-        CHECK(Parse(t, gBank, err));
+        CHECK(Parse(t, Board_Terrarium, gBank, err));
         CHECK(strcmp(gBank.presets[0].name, longest) == 0);
     }
 
@@ -194,7 +309,7 @@ int main(int argc, char** argv) {
         char expected[64];
         snprintf(expected, sizeof expected, "line %d, column %d: non-ASCII byte 0xC3", line,
                  column);
-        CHECK(!Parse(t, gBank, err));
+        CHECK(!Parse(t, Board_Terrarium, gBank, err));
         CHECK(err == expected);
         if (err != expected)
             fprintf(stderr, "  expected '%s', got '%s'\n", expected, err.c_str());
@@ -210,20 +325,20 @@ int main(int argc, char** argv) {
         buf.insert(buf.end(), trailer, trailer + sizeof trailer - 1);
         const std::vector<char> before = buf;
         gBank.count = -1;
-        CHECK(ParsePresetBankText(buf.data(), (uint32_t)base.size(), gBank, errBuf,
+        CHECK(ParsePresetBankText(buf.data(), (uint32_t)base.size(), Board_Terrarium, gBank, errBuf,
                                   sizeof errBuf, countingAlloc, countingFree));
         CHECK(gBank.count == 2);
         CHECK(buf == before);  // the source is never mutated
         CHECK(gLiveBlocks == 0);
-        CHECK(!ParsePresetBankText(buf.data(), (uint32_t)buf.size(), gBank, errBuf,
+        CHECK(!ParsePresetBankText(buf.data(), (uint32_t)buf.size(), Board_Terrarium, gBank, errBuf,
                                    sizeof errBuf, countingAlloc, countingFree));
         CHECK(strncmp(errBuf, "toml:", 5) == 0);
         CHECK(gBank.count == 0);
         CHECK(gLiveBlocks == 0);  // released on failure too
 
-        CHECK(ParsePresetBankText(base.data(), (uint32_t)base.size(), gBank, errBuf,
+        CHECK(ParsePresetBankText(base.data(), (uint32_t)base.size(), Board_Terrarium, gBank, errBuf,
                                   sizeof errBuf, countingAlloc, countingFree));
-        CHECK(!ParsePresetBankText(base.data(), 0, gBank, errBuf, sizeof errBuf,
+        CHECK(!ParsePresetBankText(base.data(), 0, Board_Terrarium, gBank, errBuf, sizeof errBuf,
                                    countingAlloc, countingFree));
         CHECK(strstr(errBuf, "empty") != nullptr);
         CHECK(gBank.count == 0);
@@ -231,11 +346,11 @@ int main(int argc, char** argv) {
         // A NUL byte inside the text: the parser would otherwise stop there silently.
         std::string withNul = base;
         withNul[withNul.find("[[preset]]", 1) - 1] = '\0';
-        CHECK(!ParsePresetBankText(withNul.data(), (uint32_t)withNul.size(), gBank, errBuf,
+        CHECK(!ParsePresetBankText(withNul.data(), (uint32_t)withNul.size(), Board_Terrarium, gBank, errBuf,
                                    sizeof errBuf, countingAlloc, countingFree));
         CHECK(strstr(errBuf, "NUL byte") != nullptr);
 
-        CHECK(!ParsePresetBankText(base.data(), (uint32_t)base.size(), gBank, errBuf,
+        CHECK(!ParsePresetBankText(base.data(), (uint32_t)base.size(), Board_Terrarium, gBank, errBuf,
                                    sizeof errBuf, failingAlloc, countingFree));
         CHECK(strstr(errBuf, "arena too small") != nullptr);
         CHECK(gLiveBlocks == 0);

@@ -11,7 +11,9 @@
 // u32 = 5 bytes (the fifth carries bits 28-31). Hash: 32-bit FNV-1a over the text.
 //
 //   0x01 INFO    -> version, maxTextBytes u21, chunkBytes u14, source (0 built-in,
-//                   1 uploaded), activeLength u21, activeHash u32, presetCount
+//                   1 uploaded), activeLength u21, activeHash u32, presetCount,
+//                   currentPreset (0-based index of the preset playing; absent in older
+//                   firmware, whose reply ends after presetCount)
 //   0x02 BEGIN   length u21, hash u32        starts (or restarts) a session
 //   0x03 DATA    seq u14, 1..240 text bytes  -> seq u14; seq == last accepted is re-ACKed
 //   0x04 COMMIT  checks length, hash, parser; stores to QSPI and reboots after Ok;
@@ -19,6 +21,21 @@
 //   0x05 REVERT  erases the stored bank and reboots after Ok
 //   0x06 READ    index u14 -> index u14, activeLength u21, text[index*240 ..+240)
 //   0x07 ABORT   ends the session
+//   0x08 DFU     -> Ok; the pedal then restarts into the Daisy bootloader's DFU mode
+//                   (no timeout), ready for `make program-dfu`. Older firmware: BadFrame.
+//   0x09 LOAD    -> avg u14, max u14, overruns u14, currentPreset: the audio callback's
+//                   load over the last second (cpu_load.h): mean and longest block in per
+//                   mille of the 1 ms block period, and how many blocks overran it; then the
+//                   0-based index of the preset playing, so a host polling LOAD follows
+//                   preset changes made on the pedal. Not a session message. Older
+//                   firmware: BadFrame.
+//
+// Identity Request (Universal Non-Real-Time, any device id 00-7F): F0 7E <id> 06 01 F7
+// Identity Reply: F0 7E 7F 06 02 7D 43 53 <member> 00 00 00 00 00 <build id> F7
+//   manufacturer 7D, family 43 53 ("CS"), member <board> 00 (LSB first: 00 00 Terrarium,
+//   01 00 HotHouse; preset_bank.h Board), version 00 00 00 00,
+//   build id: 1..32 printable ASCII bytes, the short git commit at build time with "+dirty"
+//   when tracked files differed, or "unknown" outside git (Makefile, build/build_id.c).
 //
 // Host side: stop-and-wait (one frame in flight); wait up to 10 s for the COMMIT
 // reply. After Ok to COMMIT or REVERT the USB port disappears for about 3 s while
@@ -28,18 +45,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cpu_load.h"
+
 constexpr uint8_t kSysExManufacturer = 0x7D, kSysExTag0 = 0x43, kSysExTag1 = 0x53;
 constexpr uint8_t kProtocolVersion   = 1;
 
 enum class UploadStatus : uint8_t { Ok = 0, BadFrame, NoSession, BadSeq, BadLength,
                                     LengthMismatch, HashMismatch, ParseError, FlashError };
-enum class UploadAction { None, Commit, Revert };
+enum class UploadAction { None, Commit, Revert, Dfu };
 
 // Bytewise 32-bit FNV-1a.
 uint32_t Fnv1a32(const void* data, uint32_t length);
 
 // Bytes of one SysEx frame between F0 and F7, filled from the USB interrupt.
-// Single slot: bytes arriving while a frame is Ready() are dropped.
+// Latches only frames of ours (7D 43 53 ...) or an Identity Request (7E <id> 06 01);
+// any other complete frame is dropped at its F7. Single slot: bytes arriving while a
+// frame is Ready() are dropped.
 class SysExAssembler {
 public:
     static constexpr size_t kMaxFrame = 256;
@@ -80,14 +101,20 @@ public:
     static constexpr uint32_t kChunkBytes       = 240;
     static constexpr uint32_t kSessionTimeoutMs = 5000;
     static constexpr size_t   kMaxReply         = 256;  // whole reply incl. F0/F7
+    static constexpr size_t   kMaxBuildId       = 32;   // Identity Reply build id bytes
 
     // rxBuffer holds kMaxTextBytes; `active` describes the bank the pedal booted.
-    void Init(char* rxBuffer, BankValidator validate, const ActiveBank& active);
+    // `buildId` is the Identity Reply's build id and must outlive the protocol; null or
+    // empty is sent as "unknown". `board` is the Identity Reply's member code (0..127).
+    void Init(char* rxBuffer, BankValidator validate, const ActiveBank& active,
+              const char* buildId, uint8_t board);
     // frame = bytes between F0 and F7. Commit/Revert: the caller performs the flash
     // operation, then calls Finish() to build the reply.
     UploadAction Handle(const uint8_t* frame, size_t len, uint32_t nowMs);
     void Finish(UploadAction action, bool ok);
     void Tick(uint32_t nowMs);  // ends a session idle for kSessionTimeoutMs
+    void SetLoad(const CpuLoad& load) { load_ = load; }  // what LOAD reports
+    void SetCurrentPreset(int index) { currentPreset_ = index; }  // what INFO reports
     bool SessionActive() const { return session_; }
     const ActiveBank& Active() const { return active_; }  // as passed to Init()
     const uint8_t* Reply() const { return reply_; }
@@ -108,7 +135,11 @@ private:
     char*         rx_       = nullptr;
     BankValidator validate_ = nullptr;
     ActiveBank    active_   = {};
+    const char*   buildId_  = nullptr;
+    uint8_t       board_    = 0;
     bool          session_  = false;
+    CpuLoad       load_     = {};
+    int           currentPreset_ = 0;
     uint32_t      expectedLength_ = 0;
     uint32_t      expectedHash_   = 0;
     uint32_t      received_       = 0;

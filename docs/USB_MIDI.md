@@ -14,7 +14,12 @@ operating system needs no driver; the port is named after the USB product string
 Over that port, MIDI System Exclusive (SysEx) messages can:
 - **upload** a complete `presets.toml` text, which replaces the preset bank;
 - **read back** the text of the bank that is active right now;
-- **revert** to the bank built into the firmware.
+- **revert** to the bank built into the firmware;
+- **restart into DFU mode** (the Daisy bootloader), so `dfu-util` can flash new firmware
+  without pressing any button.
+
+It also answers the standard MIDI Identity Request (section 7, "Identity Request") with the
+board the firmware was built for (Terrarium or HotHouse) and its build id.
 
 The pedal keeps working as a pedal throughout, except during an upload (see section 3).
 
@@ -44,7 +49,10 @@ The pedal keeps working as a pedal throughout, except during an upload (see sect
 - **Validation.** The pedal checks the text with the same parser `make presets-check` uses,
   before anything is written to flash. A rejected text changes nothing, and the reply carries
   the parser's message. The rules are those listed in the header of `presets.toml`; in short:
-  ASCII only, 1 to 16 presets, every parameter present and within 0.0 to 1.0.
+  ASCII only, a root key `board` naming the pedal's own board (`"terrarium"` or
+  `"hothouse"`), 1 to 16 presets, every parameter present and within 0.0 to 1.0. A bank
+  written for the other board is rejected with `bank is for board "<file>", this pedal is
+  "<this>"`; read the board from the Identity Reply first.
 
 ## 4. Message format
 
@@ -71,7 +79,7 @@ F0 7D 43 53 <cmd | 0x40> <status> <body...> F7
 
 The reply command is the request's command with bit 6 set (INFO `01` is answered by `41`).
 `<status>` is one of the codes in section 8. The pedal ignores, without replying, any SysEx
-whose first three bytes after `F0` are not `7D 43 53`.
+whose first three bytes after `F0` are not `7D 43 53`, except the Identity Request.
 
 ## 5. Numbers
 
@@ -246,6 +254,64 @@ pedal: F0 7D 43 53 47 00 F7
 
 Status: always `Ok`.
 
+### DFU (`08`)
+
+Restarts the pedal into the Daisy bootloader's DFU mode. The pedal replies, flushes a pending
+preset/bypass save, and 100 ms later resets into the bootloader, which then waits for
+`dfu-util` with no timeout (`make program-dfu`). The MIDI port disappears; the DFU device
+(`0483:df11`) appears instead. The session state is irrelevant: the pedal resets regardless.
+
+```
+host:  F0 7D 43 53 08 F7
+pedal: F0 7D 43 53 48 00 F7
+```
+
+Status: `Ok`. Firmware older than this command answers `BadFrame` and stays running.
+
+The frame may share one USB transfer with other devices' SysEx frames (for example, a host
+that sends every known firmware's DFU command at once): the pedal discards complete frames
+that are neither its own nor an Identity Request, so they cannot block its own.
+
+### LOAD (`09`)
+
+The audio callback's load over the last complete second (`src/cpu_load.h`): the mean and the
+longest block time, in per mille of the 1 ms block period (1000 = the whole period), and how
+many blocks took longer than the period (each one an audio dropout); then `currentPreset`, the
+0-based index of the preset playing (as in INFO), so a host that polls LOAD sees preset changes
+made with the footswitch. The pedal publishes a new load window once a second; `currentPreset`
+is current on every reply. Not a session message: it neither needs nor refreshes a session.
+
+```
+host:  F0 7D 43 53 09 F7
+pedal: F0 7D 43 53 49 00 <avg u14> <max u14> <overruns u14> <currentPreset> F7
+```
+
+Status: `Ok`; the three load fields are 0 before the first second completes. Firmware older
+than this command answers `BadFrame`. The editor polls it every 250 ms for its CPU meter and to
+follow the pedal's preset, and `tools/usb_preset_host.py load` prints it.
+
+### Identity Request
+
+The standard Universal Non-Real-Time Identity Request, with any device id (`00`-`7F`):
+
+```
+host:  F0 7E 7F 06 01 F7
+pedal: F0 7E 7F 06 02 7D 43 53 <board> 00 00 00 00 00 <build id> F7
+```
+
+- `7D`: manufacturer (non-commercial).
+- `43 53`: family ("CS").
+- `<board> 00`: member, LSB first. `<board>` (byte index 8 of the message, counting `F0` as
+  0) is the board the firmware was built for: `00` Terrarium, `01` HotHouse. A bank uploaded
+  to the pedal must carry the matching `board = "terrarium"` / `"hothouse"` root key.
+- `00 00 00 00`: software version (unused).
+- `<build id>`: 1 to 32 printable ASCII bytes: the short git commit the firmware was built
+  from, with `+dirty` appended when tracked files differed from it, or `unknown` when it was
+  built outside git.
+
+It is not a session message: it does not keep an upload session alive, and works at any time.
+Other `7E` messages are ignored without a reply.
+
 ### Anything else
 
 An unknown command, or a known command with the wrong body length, is answered with
@@ -314,4 +380,6 @@ sequenceDiagram
   included), at most 16 presets. The chunk size is 240 bytes. The pedal accepts SysEx
   messages of up to 256 bytes between `F0` and `F7`; longer ones are dropped without a reply.
 - **Other MIDI traffic.** Real-time bytes (`F8`-`FF`) may appear anywhere and are ignored.
-  Any other status byte inside a SysEx message aborts that message.
+  Any other status byte inside a SysEx message aborts that message. Complete SysEx messages
+  that are neither ours (`7D 43 53`) nor an Identity Request are discarded as they end, so
+  several messages may be sent back to back in one USB transfer.

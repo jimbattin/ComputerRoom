@@ -16,7 +16,8 @@ static const char* const kParameterNames[(int)Parameter::Count] = {
     "TapSeed", "DiffusionSeed", "DelaySeed", "PostDiffusionSeed",
     "CrossSeed", "DryOut", "PredelayOut", "EarlyOut", "MainOut",
     "HiPassEnabled", "LowPassEnabled", "LowShelfEnabled", "HighShelfEnabled", "CutoffEnabled", "LateStageTap",
-    "Interpolation"
+    "Interpolation",
+    "Scatter", "ScatterRate", "ScatterDepth"
 };
 
 #endif

@@ -1,11 +1,13 @@
-# Computer Room: Algorithmic Reverb for Terrarium
+# Computer Room: Algorithmic Reverb for Terrarium and HotHouse
 Computer room is based on GuitarML's fork of Cloud Seed Reverb for Terrarium with several major enhancements.
+It builds for two pedals: the [PedalPCB Terrarium](https://www.pedalpcb.com/product/pcb351/)
+(default) and the Cleveland Music Co. HotHouse (`make BOARD=hothouse`).
 MIT License.
 
 ## Presets
 - Changed by tapping the 2nd footswitch (FS2 - on the right)
 - Changes to a preset can be saved and recalled after power-cycling by holding down the bypass footswitch (FS1) and waiting for 3 rapid LED blinks 
-- Defined in [presets.toml](presets.toml)
+- Defined in [presets.toml](presets.toml) (Terrarium) and [presets_hothouse.toml](presets_hothouse.toml) (HotHouse)
 - Changes on the pedal by holding down both foot switches
 - Web-based Preset Editor: Connect your Seed via USB to a machine that supports Web MIDI to load and save presets to the device
 - All Knobs and Switches can be remapped (per preset) via the [editor](editor/) or [presets.toml](presets.toml)
@@ -22,7 +24,7 @@ Just plug into your Seed's USB port and pull up the editor on your browser. Don'
 
 ## Assignable Knobs, Switches and Secondary Controls
 - Accessed by holding down the 2nd footswitch (FS2 - on the right)
-- Secondary function can be assigned to all 6 knobs and 4 switches
+- Secondary function can be assigned to all 6 knobs and every toggle (4 two-position switches on Terrarium, 3 three-position toggles on HotHouse)
 - Can be assigned in [presets.toml](presets.toml) and via the [editor](editor/)
 
 ![Knobs](docs/assign-knobs.png)
@@ -34,7 +36,8 @@ Just plug into your Seed's USB port and pull up the editor on your browser. Don'
 
 ## Other Stuff
 - Bloom Effecet: You can reverse the gain envelope on multitap delays to increase in volume. Toggled by an assignable switch
-- Delay Lines: Each preset has a default (2) and maximum (4 or 5) number of delay lines, toggled by an assignable switch
+- Scatter: the early taps' levels wander independently (rate 0.1-5 Hz, depth 0-1), toggled by an assignable switch (`early.Scatter`, or Down on the HotHouse `early.envelope` toggle)
+- Delay Lines: Each preset has a default (2) and maximum (4 or 5) number of delay lines, toggled by an assignable switch (on HotHouse also a single line)
 - Some "1khz whine" reduction (We keep the core busy) 
 - General performance improvements to give presets more headroom before crackles show up
 
@@ -63,12 +66,14 @@ You need:
 - A host C/C++ compiler (`gcc`/`g++` by default, or set `HOSTCC`/`HOSTCXX`): `make` builds a
   small host tool that validates presets.toml before it is embedded in the firmware
 
-libdaisy, DaisySP and Terrarium are git submodules, pinned to exact commits (libdaisy v8.1.0,
-DaisySP V1.0.0), and libdaisy has submodules of its own (CMSIS, the STM32 HAL). The build fails
-without them, so clone recursively:
+libdaisy, DaisySP and Terrarium are git submodules, pinned to exact commits (libdaisy v9.0.0,
+DaisySP V1.0.0), and libdaisy has submodules of its own (CMSIS, the STM32 HAL). The Terrarium
+submodule is no longer used by the build (the pin maps for both pedals live in
+`src/board.h`), but stays checked out. The build fails without the others, so clone
+recursively:
 ```
-git clone --recurse-submodules https://github.com/jimbattin/DaisyCloudSeed.git
-cd DaisyCloudSeed
+git clone --recurse-submodules https://github.com/jimbattin/ComputerRoom.git
+cd ComputerRoom
 ```
 In a clone made without `--recurse-submodules`, or after pulling a change that moves a
 submodule, run:
@@ -81,12 +86,14 @@ the code is built against.
 Then build the daisy libraries once, and the firmware, from the repo root:
 ```
 make libs
-make
+make                 # Terrarium: build/terrarium/cloudseed.bin, embeds presets.toml
+make BOARD=hothouse  # HotHouse: build/hothouse/cloudseed.bin, embeds presets_hothouse.toml
+make release         # both boards: build/release/cloudseed-terrarium.bin, cloudseed-hothouse.bin
 ```
 `make` rebuilds the CloudSeed library itself when its sources change; `make libs` is only needed
 again after a submodule update. `make test` runs the host unit tests.
 
-Then flash your terrarium with the following commands (or use the [Electrosmith Web Programmer](https://electro-smith.github.io/Programmer/))
+Then flash your pedal with the following commands (or use the [Electrosmith Web Programmer](https://electro-smith.github.io/Programmer/))
 **NOTE** This fork (of a fork) uses BOOT_SRAM, so the Daisy bootloader must be flashed once
 (`make program-boot`) before the app, and again whenever libdaisy ships a newer one: this tree
 flashes bootloader v6.4, which includes libdaisy's QSPI write-protect fix. `program-dfu` only
@@ -96,32 +103,39 @@ blinks rapidly.
 # from the repo root, using USB
 make program-boot
 # Hit restart and then hold Boot on your DaisySeed until you see a rapid blink
-make program-dfu
+make program-dfu                 # Terrarium
+make BOARD=hothouse program-dfu  # HotHouse
 ```
+A pedal already running this firmware can be put into DFU mode over USB instead of with the
+buttons: `python3 tools/usb_preset_host.py dfu`, then `make program-dfu` (or `make
+BOARD=hothouse program-dfu`). Close any browser tab using Web MIDI first (the editor holds the
+pedal's MIDI port while it is open). A Seed running other firmware needs BOOT/RESET.
 
 ## Editing presets
 
-All ten presets live in [presets.toml](presets.toml) at the repo root - names, LED blink
-timing, the per-preset default and maximum delay-line counts, all 46 reverb parameters, the
+All ten presets live in [presets.toml](presets.toml) (Terrarium) or
+[presets_hothouse.toml](presets_hothouse.toml) (HotHouse) at the repo root - names, LED blink
+timing, the per-preset default and maximum delay-line counts, all 49 reverb parameters, the
 knob and toggle maps, the reverse-delay window (`[preset.params.reverse] delay`), and the
-stored state of every toggle target. The file is embedded into the firmware image, so changing a
-preset is:
+stored state of every toggle target. Each file starts with a root key `board = "terrarium"` /
+`board = "hothouse"`, and a pedal rejects a bank for the other board. The file is embedded into
+the firmware image of its board, so changing a preset is:
 ```
 # edit presets.toml, then:
-make                 # validates presets.toml, then builds
-make program-dfu
+make                 # validates presets.toml, then builds (make BOARD=hothouse for presets_hothouse.toml)
+make program-dfu     # make BOARD=hothouse program-dfu
 ```
 `make` runs the file through the same parser the pedal uses and refuses to build firmware if it
 fails: a non-ASCII character anywhere (the file must be plain ASCII, comments included),
-unknown or misplaced parameters, a missing group, an unknown preset or top-level key, an
+unknown or misplaced parameters, a missing group, a missing or wrong `board` key, an unknown preset or top-level key, an
 invalid knob_map/toggle_map target, a `LineCount` key, bad delay-line counts, a name over
 31 bytes, more than 16 presets, a bad range, TOML syntax errors, or a document too large for the
 boot-time parse arena. So a
 broken preset file can no longer reach the pedal - where the only symptom would be **both**
 LEDs blinking together at 5 Hz with no audio.
 
-`make presets-check` runs the same check without building firmware. It fails only on a file the
-parser rejects; preset values themselves are free to change.
+`make presets-check` runs the same check on both files without building firmware. It fails
+only on a file the parser rejects; preset values themselves are free to change.
 
 Preset order is stored in flash: append new `[[preset]]` entries at the end, and bump
 `SETTINGS_VERSION` in `src/pedal_storage.cpp` if you reorder or delete any.
@@ -129,7 +143,7 @@ Preset order is stored in flash: append new `[[preset]]` entries at the end, and
 ## Uploading presets over USB
 
 With the pedal connected over USB, a host program such as a web page using Web MIDI can:
-- upload a complete presets.toml;
+- upload a complete preset bank (presets.toml, or presets_hothouse.toml for a HotHouse);
 - read back the bank that is active;
 - revert to the bank built into the firmware.
 
@@ -137,11 +151,13 @@ No reflash is needed. The pedal is a class-compliant USB-MIDI device from power-
 driver is needed.
 
 - The upload is checked with the same parser as `make presets-check` before anything is
-  stored. A rejected file changes nothing, and the parser's message is sent back.
+  stored, including its `board` key: a Terrarium takes only `board = "terrarium"` banks, a
+  HotHouse only `board = "hothouse"`. A rejected file changes nothing, and the parser's message
+  is sent back.
 - During an upload the reverb is switched off and the dry signal passes through.
 - A successful upload or revert reboots the pedal. The USB port disappears for about 3 s.
-- The uploaded bank replaces the built-in presets.toml until you revert, or until different
-  firmware is flashed.
+- The uploaded bank replaces the built-in bank until you revert, or until different firmware
+  is flashed.
 - Every change of the active bank discards the presets saved on the pedal (FS 1 held 5 s).
 
 The protocol is documented for host authors in [docs/USB_MIDI.md](docs/USB_MIDI.md). To test a
@@ -160,56 +176,67 @@ Run it from source (development server), from the repo root:
 make editor          # bun install from bun.lock, then http://localhost:5174 (Ctrl-C stops it)
 ```
 It stops with a pointer to https://bun.sh if `bun` is not on the PATH (`make editor BUN=/path/to/bun`
-picks another binary). The same by hand:
+picks another binary). The same from editor/, where `make serve PORT=5175` picks another port:
 ```
 cd editor
-bun install          # once, and after package.json changes
-bun run dev          # http://localhost:5174, reloads on source changes
+make serve           # bun install when package.json/bun.lock changed, then the dev server
 ```
 Open http://localhost:5174 in Chrome or Firefox with the pedal plugged in over USB. Use
-`localhost`, not a LAN address: Web MIDI SysEx only works in a secure context, and the port is
-fixed, so the server exits if 5174 is already in use. Here **PROJECT** reads the repo's
-presets.toml as it is on disk.
-
-Build a static copy:
-```
-cd editor
-bun run build        # type-checks, then writes editor/dist/ (git-ignored)
-bun run preview      # serves editor/dist/ at http://localhost:4174
-```
-editor/dist/ uses relative asset paths, so it can be served from any directory, but only over
-`localhost` or HTTPS, for the same secure-context reason. A build embeds presets.toml as it was
-at build time: rebuild after editing it, or **PROJECT** loads the old bank.
+`localhost`, not a LAN address: Web MIDI SysEx only works in a secure context, and the server
+exits if its port is already in use. Here **PROJECT** reads the repo's presets.toml or
+presets_hothouse.toml as it is on disk. Only one program can use the pedal's MIDI port at a
+time: close the editor tab before using `tools/usb_preset_host.py`, and vice versa.
 
 Or build the whole editor into one stand-alone file, from the repo root:
 ```
-make editor-html     # bun install + type-check, then writes build/editor.html
+make editor-html     # make -C editor html (writes editor/dist/editor.html), copied to build/editor.html
 ```
-build/editor.html has the JavaScript, CSS and presets.toml inlined and loads nothing else, so it
+build/editor.html has the JavaScript, CSS and both built-in banks (presets.toml and presets_hothouse.toml) inlined and loads nothing else, so it
 can be opened straight from disk (`file://`) or copied anywhere. Chromium treats `file://` as a
 secure context, so Web MIDI is available there. It is rebuilt only when an editor source or
-presets.toml changes, and like dist/ it carries presets.toml as it was at build time.
+a built-in bank changes, and it carries the banks as they were at build time: rebuild after editing
+it, or **PROJECT** loads the old bank.
 
 Checks (not part of `make test`):
 ```
 cd editor
-bun test             # unit tests (bun:test, DOM from happy-dom)
-bun run typecheck    # tsc --noEmit
+make test            # unit tests (bun:test, DOM from happy-dom)
+make check           # tsc --noEmit, then biome check (lint, format, import order)
+make fmt             # biome check --write: apply formatting and safe fixes
 ```
 
 Using it:
-- **PROJECT** loads the repo's presets.toml, **OPEN** loads any `.toml` file, and **SAVE**
-  downloads the bank. Where the file lands is set by the browser's download setting ("ask where
-  to save" lets you overwrite presets.toml).
-- **CONNECT** shows the pedal's active bank (source, preset count, length, hash, and whether
-  it matches the loaded bank); **READ** loads it into the editor. **UPLOAD** sends the edited
-  bank and **REVERT** returns the pedal to its built-in bank. Both reboot the pedal and erase the
-  sounds saved on it. Firefox asks for MIDI permission on the first CONNECT.
+- **PROJECT** loads the repo's built-in bank and **OPEN** loads any `.toml` file. The board key
+  next to PROJECT picks presets.toml (TERRARIUM) or presets_hothouse.toml (HOTHOUSE); while a
+  pedal is connected it is locked to the pedal's board. **SAVE** downloads the bank. Where the
+  file lands is set by the browser's download setting ("ask where to save" lets you overwrite
+  the file). The header LED shows the loaded bank's board, and at its right end a CPU meter:
+  the pedal's audio load over the last second (bar = average, tick = longest 1 ms block,
+  `XRUN` when a block overran and the audio dropped out). It is dim while no pedal is linked or
+  the firmware predates the LOAD command.
+- **CONNECT** sends the MIDI Identity Request. The device panel shows the pedal's board and
+  build id; no reply means a Terrarium (older firmware). It also shows the pedal's active bank
+  (source, preset count, length, hash, and whether it matches the loaded bank); **READ** loads
+  it into the editor. **UPLOAD** sends the edited bank and **REVERT** returns the pedal to its
+  built-in bank. Both reboot the pedal and erase the sounds saved on it. UPLOAD refuses a bank
+  whose `board` differs from the linked pedal's, with the pedal's own message; that bank can
+  still be opened and edited. With no pedal linked, a bank is checked against its own `board`
+  key (missing or unknown is checked as terrarium). When the page opens, the editor connects on
+  its own and READs the pedal's active bank; with no pedal (or other firmware on the Daisy) it
+  starts empty and shows why. Browsers ask for MIDI permission on that first connection.
+  While linked, a preset change made on the pedal (FS2) selects that preset in the editor
+  within a quarter second, as long as the editor holds the pedal's bank (read from it, or
+  identical to it); choosing a preset in the editor does not change the pedal.
 - Program keys 01-16 select a preset. **DUP** appends a copy at the end, and **DEL** removes
   one; there is no reordering. The page keys show faders with the engine's real units, the
   knob and toggle maps, and the name, LED and delay-line settings. On the KNOBS and SWITCH
   pages each control has an ivory **A** row (primary, normal playing) and a dark **B** row
-  (secondary, while FS2 is held).
+  (secondary, while FS2 is held). The SWITCH page has 4 SW columns (DOWN / UP) for a
+  Terrarium and 3 TOGGLE columns (DOWN / MIDDLE / UP) for a HotHouse. Its target lists offer
+  `early.Scatter` on both boards and `delay_lines.select`, `early.envelope` and `reverse.mode`
+  only for a HotHouse. The **SCATTER** page holds Scatter (ON/OFF), ScatterRate (Hz) and
+  ScatterDepth (%). On a HotHouse the REV/LN page's LINES strip has ONE / DEF / MAX keys
+  (`delay_lines.select` 0 / 0.5 / 1).
 - An amber dot marks anything changed since the bank was loaded or last saved: the value
   itself, its page key, and its program key. A ring on a program key marks a preset added
   with DUP. Hovering a changed value shows its original.
@@ -217,7 +244,9 @@ Using it:
   preset: the input filters, pre-delay, early taps and diffuser, the delay-line loop with its
   in-loop EQ and decay feedback, the output mix, and the reverse voice. It shows the preset's
   stored values and switch states (switched-off stages dashed, silent mix paths dashed, the
-  delay-line count as stacked outlines), not the pedal's live levers. The current page's
+  delay-line count as stacked outlines, following `delay_lines.select` on a HotHouse), not the
+  pedal's live levers. The TAPS block shows Bloom/Scatter, and a three-way toggle target badges
+  the blocks it drives. The current page's
   stages are outlined; hovering a fader or map row lights its exact stage, and clicking a stage
   opens its page. The panel below the diagram explains the focused stage and what each of its
   parameters does. The **FLOW** key collapses it, and the browser remembers that.
@@ -299,8 +328,8 @@ gated parameter (the shelves, the in-loop cutoff, the diffusers) must be enabled
 
 ## Toggle mapping
 
-Every preset also carries a `[preset.toggle_map]` table naming what each toggle switch does
-(toggle1..toggle4 = SW 1..SW 4):
+Every preset also carries a `[preset.toggle_map]` table naming what each toggle switch does.
+On a Terrarium, toggle1..toggle4 = SW 1..SW 4 (two positions, Down/Up):
 
 ```toml
 [preset.toggle_map]
@@ -314,12 +343,14 @@ toggle3_b = "reverse.enabled"
 toggle4_b = "reverse.direct_mix"
 ```
 
-All eight keys are required. Accepted targets (lever up = on):
+All eight keys are required on a Terrarium. On/off targets (everything in this table) are on
+only with the lever Up:
 
 | Target | Notes |
 | --- | --- |
 | `delay_lines.max` | Off = the preset's `default_delay_lines`, on = its `max_delay_lines` (default SW 1) |
 | `early.Bloom` | Bloom (default SW 2) |
+| `early.Scatter` | Scatter: each early tap's level oscillates (rate `ScatterRate`, depth `ScatterDepth`) |
 | `reverse.enabled` | Reverse voice on (default SW 3) |
 | `reverse.direct_mix` | Off = reverse feeds the reverb tail, on = reversed reverb mixed into the output (default SW 4) |
 | `input.HiPassEnabled`, `input.LowPassEnabled` | Input high-pass / low-pass on/off. While a toggle targets one, knobs on `HighPass` / `LowPass` no longer switch that filter on |
@@ -335,6 +366,21 @@ reverb parameters in `[preset.params.*]`, and `[preset.params.delay_lines] max` 
 `[preset.params.reverse] enabled` / `direct_mix` for the three pedal functions (all 0.0 = off
 as shipped).
 
+On a HotHouse, toggle1..toggle3 are its three toggles, left to right, each with three
+positions (Down / Middle / Up); the six keys `toggle1_a`..`toggle3_b` are required and
+`toggle4_*` is rejected. Every on/off target above works and is on only Up (Middle = off).
+Three more targets use all three positions and need a HotHouse (a Terrarium bank rejects them
+with `needs a three-position toggle`). The shipped HotHouse map uses them on both banks:
+
+| Target | Down | Middle | Up | Default |
+| --- | --- | --- | --- | --- |
+| `delay_lines.select` | 1 delay line | `default_delay_lines` | `max_delay_lines` | toggle 1 |
+| `early.envelope` | Scatter on, Bloom off | both off | Bloom on, Scatter off | toggle 2 |
+| `reverse.mode` | reverse off | reverse into the reverb | reverse direct mix | toggle 3 |
+
+A HotHouse bank stores the delay-line state as `[preset.params.delay_lines] select` (exactly
+0, 0.5 or 1 = one line / default / max) instead of `max`.
+
 Toggles are **parked** like knobs: after power-up, a preset change, or switching banks the
 preset's stored values apply whatever the levers say, and a lever writes nothing until it is
 flipped. Then it sets its target to the lever position, and follows the lever from there. So
@@ -344,7 +390,8 @@ cancels the preset change on the FS 2 release.
 
 # Control
 
-Listed below is the default control scheme for the pedal presets.
+Listed below is the default control scheme for the pedal presets. Both pedals have the same
+knobs, footswitches and LEDs; the Terrarium has SW 1..SW 4, the HotHouse T1..T3.
 
 | Control | Description | Comment |
 | --- | --- | --- |
@@ -360,16 +407,19 @@ Listed below is the default control scheme for the pedal presets.
 | Ctrl 4 + FS 2 held | Line modulation depth | Delay-line modulation amount, 0-2.5 ms |
 | Ctrl 5 + FS 2 held | Line modulation rate | Delay-line modulation rate, 0-5 Hz |
 | Ctrl 6 + FS 2 held | Reverse window | Reverse-delay window length, 20-2000 ms |
-| SW 1 | Delay Lines (default target `delay_lines.max`) | Off = the preset's `default_delay_lines` (2 in every shipped preset); On = its `max_delay_lines` (5, or 4 for "Through the Looking Glass"). |
-| SW 2 | Bloom (default target `early.Bloom`) | Reverses the order of multi-tap delay gains, resulting in subsequent taps getting louder rather than quietier. |
-| SW 3 | Reverse Delay (default target `reverse.enabled`) | Off = dry + reverb only; On = enables the reverse voice, routed per `reverse.direct_mix` (SW 4 by default: into the reverb tail, or mixed straight into the output). Its window length is the knob mapped to `reverse.delay` (Ctrl 6 secondary by default). |
-| SW 4 | Reverse Routing (default target `reverse.direct_mix`) | Chooses where the reverse goes. Off = into the reverb (the reversed guitar feeds the wet tail; the forward dry pass-through stays clean via dry-gain cancellation). On = direct mix (a reversed copy of the reverb output is mixed straight into the output). Only audible when the reverse voice is on. |
+| SW 1 (Terrarium) | Delay Lines (default target `delay_lines.max`) | Off = the preset's `default_delay_lines` (2 in every shipped preset); On = its `max_delay_lines` (5, or 4 for "Through the Looking Glass"). |
+| SW 2 (Terrarium) | Bloom (default target `early.Bloom`) | Reverses the order of multi-tap delay gains, resulting in subsequent taps getting louder rather than quietier. |
+| SW 3 (Terrarium) | Reverse Delay (default target `reverse.enabled`) | Off = dry + reverb only; On = enables the reverse voice, routed per `reverse.direct_mix` (SW 4 by default: into the reverb tail, or mixed straight into the output). Its window length is the knob mapped to `reverse.delay` (Ctrl 6 secondary by default). |
+| SW 4 (Terrarium) | Reverse Routing (default target `reverse.direct_mix`) | Chooses where the reverse goes. Off = into the reverb (the reversed guitar feeds the wet tail; the forward dry pass-through stays clean via dry-gain cancellation). On = direct mix (a reversed copy of the reverb output is mixed straight into the output). Only audible when the reverse voice is on. |
+| T1 (HotHouse) | Delay Lines (default target `delay_lines.select`) | Down = 1 line; Middle = `default_delay_lines`; Up = `max_delay_lines`. |
+| T2 (HotHouse) | Early envelope (default target `early.envelope`) | Down = Scatter; Middle = static taps; Up = Bloom. |
+| T3 (HotHouse) | Reverse (default target `reverse.mode`) | Down = off; Middle = reverse into the reverb tail; Up = reverse mixed direct. Window length as for SW 3. |
 | FS 1 | Bypass/Active | Bypass / effect engaged. Acts on **release**. A release after a 5 s hold, or while FS 2 is (or was, during the same press) held, does not toggle bypass. |
 | FS 1 (held 5 s) | Save preset | Stores the current sound into the current preset (survives power cycles; see "Saving and restoring presets"). Both LEDs blink 3× to confirm. |
-| FS 1 + FS 2 (held 5 s) | Restore factory preset | Reverts the current preset to its values in the active bank (presets.toml or the uploaded bank) and erases its saved version. Both LEDs blink 3× to confirm. |
+| FS 1 + FS 2 (held 5 s) | Restore factory preset | Reverts the current preset to its values in the active bank (presets.toml or the uploaded bank) and erases its saved version. Both LEDs blink 3× to confirm. On a HotHouse this is not the vendor firmwares' DFU gesture: enter DFU with BOOT/RESET or the USB-MIDI DFU command. |
 | FS 2 | Cycle Preset | Tap: loads the next available Preset, starts at beginning after the last in the list. Acts on **release**. Presets 1-9 are derived from the original Cloud Seed plugin presets ("Through the Looking Glass" capped at 4 delay lines); "Dark Plate" is adapted from Ghost Note Audio's CloudSeedCore |
 | FS 2 (held) | Secondary knob and toggle bank | While held, every knob controls its `knobN_b` target instead of `knobN_a`, and a toggle flip writes its `toggleN_b` target. The release skips the preset change if a secondary knob was turned (by at least 1% of its travel) or a toggle flipped during the hold, or if FS 1 was also pressed. |
 | LED 1 | Bypass/Active Indicator |Illuminated when effect is set to Active. Blinks 3× with LED 2 to confirm a save or restore. |
 | LED 2 | Preset indicator | Number of flashes = current preset number; off while bypassed. Blinks 3× with LED 1 to confirm a save or restore. |
-| Audio In 1 | Audio input | Mono only for Terrarium |
-| Audio Out 1 | Mix Out | Mono only for Terrarium |
+| Audio In 1 | Audio input | Mono (left input) on both pedals |
+| Audio Out 1 + 2 | Mix Out | Mono: both outputs carry the same signal, including bypass |

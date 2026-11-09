@@ -20,7 +20,11 @@ namespace CloudSeed
 		// Fixed MaxTaps size: a knob write must not allocate.
 		float tapGains[MaxTaps];
 		int tapPosition[MaxTaps];
-		AudioLib::SeedSeries<2 * MaxTaps> seeds;  // Update() draws two values per tap
+		// Update() draws two values per tap; Scatter reads a per-tap LFO phase and rate
+		// spread from the fixed slots after them (kScatterSeedBase), so the tap pattern
+		// does not change when Scatter is added.
+		static const int kScatterSeedBase = 2 * MaxTaps;
+		AudioLib::SeedSeries<4 * MaxTaps> seeds;
 		int count;
 		float length;
 		float gain;
@@ -31,6 +35,18 @@ namespace CloudSeed
 		float tapGainsTemp[MaxTaps];
 		int tapPositionTemp[MaxTaps];
 		int countTemp;
+		int cleanTapTemp;  // index of the tap-vs-clean mix tap: never animated
+		int cleanTap;
+
+		// Scatter: each tap's gain is scaled by 1 - depth * (1 + sin(2*pi*phase)) / 2,
+		// i.e. it oscillates between (1 - depth) and 1 of its static value. The factor
+		// is recomputed once per block and ramped linearly across it.
+		bool  scatter;
+		float scatterRate;   // cycles per sample (Hz / samplerate)
+		float scatterDepth;  // 0..1
+		bool  scatterActive; // modulated path in use: scatter on, or still ramping back to 1
+		float scatterPhase[MaxTaps];  // 0..1
+		float scatterMod[MaxTaps];    // modulation factor reached at the end of the last block
 
 	public:
 		// buffer/output are placement-new'd into the SDRAM bump-allocator pool
@@ -46,6 +62,9 @@ namespace CloudSeed
 		void SetTapDecay(float tapDecay)        { decay = tapDecay; Update(); }
 		void SetTapGain(float tapGain)          { gain = tapGain; Update(); }
 		void SetBloom(bool bloomOn)             { bloom = bloomOn; Update(); }
+		void SetScatter(bool on)                { scatter = on; if (on) scatterActive = true; }
+		void SetScatterRate(float cyclesPerSample) { scatterRate = cyclesPerSample; }
+		void SetScatterDepth(float depth)       { scatterDepth = depth; }
 
 		void Process(float* input, int sampleCount);
 		void ClearBuffers();
@@ -55,6 +74,8 @@ namespace CloudSeed
 		// setter calls it, and inlining it into each ReverbChannel::SetParameter case
 		// cost 7.5 KB of SRAM for code that runs once per knob write.
 		void Update();
+		// Process() while Scatter is on or ramping back to the static gains.
+		void ProcessScatter(float* input, int sampleCount);
 	};
 }
 

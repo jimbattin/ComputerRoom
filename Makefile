@@ -5,12 +5,43 @@ TARGET = cloudseed
 # to load our app into SRAM from QSPI Flash
 export APP_TYPE = BOOT_SRAM
 
+# Target pedal: terrarium (default) or hothouse (src/board.h). Each board builds into
+# its own directory, build/<board>/, and embeds its own preset bank.
+BOARD ?= terrarium
+ifeq ($(BOARD),terrarium)
+BOARD_DEF    = -DCLOUDSEED_BOARD_TERRARIUM=1
+PRESETS_TOML = presets.toml
+else ifeq ($(BOARD),hothouse)
+BOARD_DEF    = -DCLOUDSEED_BOARD_HOTHOUSE=1
+PRESETS_TOML = presets_hothouse.toml
+else
+$(error BOARD must be terrarium or hothouse, not '$(BOARD)')
+endif
+# libdaisy's core/Makefile sets BUILD_DIR = build with plain `=` and creates it with a
+# `mkdir` that has no -p: override the former, create the parent for the latter.
+override BUILD_DIR = build/$(BOARD)
+
 # Sources
 # Source lists must be set before including the core Makefile: it evaluates
 # vpath directives at parse time (libdaisy/core/Makefile:278-284).
 CPP_SOURCES = src/cloudseed.cpp src/preset_bank.cpp src/pedal_leds.cpp src/sdram_pool.cpp \
               src/pedal_storage.cpp src/preset_protocol.cpp src/usb_midi_link.cpp
 C_SOURCES += third_party/tomlc99/toml.c
+# Build id for the MIDI Identity Reply (src/preset_protocol.h): the repo's short commit, +dirty when
+# tracked files differ, unknown outside git. build/build_id.c is rewritten only when the id changes, so
+# an unchanged tree relinks nothing. kBuildId is non-const with a fixed size: it lands in .data, outside
+# the _stext.._etext range firmwareImageHash() covers (src/pedal_storage.cpp), and a new id moves
+# nothing in that range, so a commit that changes no code keeps saved user presets and an uploaded bank.
+# BUILD_DIR is build/<board>; the build id is shared by both boards.
+BUILD_ID_HEAD := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null)
+BUILD_ID := $(if $(BUILD_ID_HEAD),$(BUILD_ID_HEAD)$(if $(shell git -C $(CURDIR) status --porcelain --untracked-files=no 2>/dev/null),+dirty),unknown)
+BUILD_ID_C := build/build_id.c
+BUILD_ID_SRC := char kBuildId[33] = "$(BUILD_ID)";
+$(shell mkdir -p build)
+ifneq ($(BUILD_ID_SRC),$(shell cat $(BUILD_ID_C) 2>/dev/null))
+$(shell printf '%s\n' '$(BUILD_ID_SRC)' > $(BUILD_ID_C))
+endif
+C_SOURCES += $(BUILD_ID_C)
 ASM_SOURCES += src/presets_toml.s
 # Library Locations
 LIBDAISY_DIR = ./libdaisy
@@ -38,13 +69,12 @@ $(CLOUDSEED_LIB): FORCE
 FORCE:
 .PHONY: FORCE
 
-# Include terrarium.h
-C_INCLUDES += -I./Terrarium
+C_DEFS += $(BOARD_DEF)
 
 CPPFLAGS += -ffast-math
 
 C_INCLUDES += -I./third_party/tomlc99 -I. -I./src
-ASFLAGS += -Wa,-I,$(CURDIR)
+ASFLAGS += -Wa,-I,$(CURDIR) '-DPRESETS_TOML_FILE="$(PRESETS_TOML)"'
 
 # Host toolchain for the preset validator (overridable for odd environments).
 HOSTCC  ?= gcc
@@ -54,37 +84,37 @@ $(BUILD_DIR)/toml_host.o: third_party/tomlc99/toml.c | $(BUILD_DIR)
 	$(HOSTCC) -std=gnu11 -O1 -Ithird_party/tomlc99 -c -o $@ $<
 
 $(BUILD_DIR)/preset_check: tools/preset_check.cpp src/preset_bank.cpp src/preset_bank.h \
-		CloudSeed/DelayLineCount.h $(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
+		CloudSeed/DelayLineCount.h CloudSeed/Parameter.h CloudSeed/ParameterNames.h \
+		$(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
 	$(HOSTCXX) -std=gnu++14 -O1 -I. -Isrc -Ithird_party/tomlc99 -o $@ \
 		tools/preset_check.cpp src/preset_bank.cpp $(BUILD_DIR)/toml_host.o
 
-# Schema gate: presets.toml is validated with the firmware's own parser before
-# it can be embedded. A file that fails here never reaches the pedal, where the
-# only symptom would be FatalErrorLoop().
-$(BUILD_DIR)/presets.valid: presets.toml $(BUILD_DIR)/preset_check
-	./$(BUILD_DIR)/preset_check --validate presets.toml
+# Schema gate: the board's preset bank is validated with the firmware's own parser
+# before it can be embedded. A file that fails here never reaches the pedal, where
+# the only symptom would be FatalErrorLoop().
+$(BUILD_DIR)/presets.valid: $(PRESETS_TOML) $(BUILD_DIR)/preset_check
+	./$(BUILD_DIR)/preset_check --board $(BOARD) --validate $(PRESETS_TOML)
 	@touch $@
 
 # Re-assemble the embedded blob whenever the preset data changes, and only after
 # it has passed validation.
-$(BUILD_DIR)/presets_toml.o: presets.toml $(BUILD_DIR)/presets.valid
+$(BUILD_DIR)/presets_toml.o: $(PRESETS_TOML) $(BUILD_DIR)/presets.valid
 
-# Manual check of presets.toml without building firmware. Fails only if the
-# firmware's own parser would reject the file (see src/preset_bank.cpp); preset
-# values themselves are free to change. Always re-runs, unlike the stamp above.
+# Manual check of both boards' banks without building firmware. Fails only if the
+# firmware's own parser would reject a file (see src/preset_bank.cpp); preset values
+# themselves are free to change. Always re-runs, unlike the stamp above.
 presets-check: $(BUILD_DIR)/preset_check
-	./$(BUILD_DIR)/preset_check --validate presets.toml
-
-.PHONY: presets-check
+	./$(BUILD_DIR)/preset_check --board terrarium --validate presets.toml
+	./$(BUILD_DIR)/preset_check --board hothouse --validate presets_hothouse.toml
 
 # Host unit tests for the host-portable modules (knob/toggle/footswitch state
-# machines, preset parser, USB preset protocol, stored-bank check) and the reverb
-# engine. No firmware build needed.
+# machines, preset parser, USB preset protocol, stored-bank check, CPU load window)
+# and the reverb engine. No firmware build needed.
 HOST_TEST_CXXFLAGS = -std=gnu++14 -O1 -Wall -I. -Isrc -Ithird_party/tomlc99
 HOST_TESTS = $(BUILD_DIR)/knob_bank_test $(BUILD_DIR)/toggle_bank_test \
              $(BUILD_DIR)/footswitch_gestures_test $(BUILD_DIR)/preset_bank_test \
              $(BUILD_DIR)/engine_alloc_test $(BUILD_DIR)/preset_protocol_test \
-             $(BUILD_DIR)/stored_bank_test
+             $(BUILD_DIR)/stored_bank_test $(BUILD_DIR)/cpu_load_test
 
 # The engine test compiles the whole CloudSeed library for the host.
 CLOUDSEED_HOST_SOURCES = $(wildcard CloudSeed/*.cpp CloudSeed/*/*.cpp)
@@ -103,22 +133,25 @@ $(BUILD_DIR)/engine_alloc_test: tests/engine_alloc_test.cpp tests/check.h $(CLOU
 		$(CLOUDSEED_HEADERS) | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/engine_alloc_test.cpp $(CLOUDSEED_HOST_SOURCES)
 $(BUILD_DIR)/preset_protocol_test: tests/preset_protocol_test.cpp tests/check.h src/preset_protocol.cpp \
-		src/preset_protocol.h src/preset_bank.cpp src/preset_bank.h CloudSeed/DelayLineCount.h \
+		src/preset_protocol.h src/cpu_load.h src/preset_bank.cpp src/preset_bank.h CloudSeed/DelayLineCount.h \
 		$(BUILD_DIR)/toml_host.o | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/preset_protocol_test.cpp src/preset_protocol.cpp \
 		src/preset_bank.cpp $(BUILD_DIR)/toml_host.o
 $(BUILD_DIR)/stored_bank_test: tests/stored_bank_test.cpp tests/check.h src/stored_bank.h \
-		src/preset_protocol.cpp src/preset_protocol.h | $(BUILD_DIR)
+		src/preset_protocol.cpp src/preset_protocol.h src/cpu_load.h | $(BUILD_DIR)
 	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ tests/stored_bank_test.cpp src/preset_protocol.cpp
+$(BUILD_DIR)/cpu_load_test: tests/cpu_load_test.cpp tests/check.h src/cpu_load.h | $(BUILD_DIR)
+	$(HOSTCXX) $(HOST_TEST_CXXFLAGS) -o $@ $<
 
 test: $(HOST_TESTS)
 	./$(BUILD_DIR)/knob_bank_test
 	./$(BUILD_DIR)/toggle_bank_test
 	./$(BUILD_DIR)/footswitch_gestures_test
-	./$(BUILD_DIR)/preset_bank_test tests/fixtures/two_presets.toml
+	./$(BUILD_DIR)/preset_bank_test tests/fixtures/two_presets.toml tests/fixtures/two_presets_hothouse.toml
 	./$(BUILD_DIR)/engine_alloc_test
 	./$(BUILD_DIR)/preset_protocol_test tests/fixtures/two_presets.toml
 	./$(BUILD_DIR)/stored_bank_test
+	./$(BUILD_DIR)/cpu_load_test
 
 .PHONY: test
 
@@ -132,25 +165,33 @@ define require_bun
 		exit 1; }
 endef
 
-# Installs the editor's packages from bun.lock, then runs the dev server at
-# http://localhost:5174 until Ctrl-C.
+# Installs the editor's packages from bun.lock (once), then runs `make -C editor serve`:
+# the dev server at http://localhost:5174 until Ctrl-C.
 editor:
 	$(require_bun)
-	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run dev
+	$(MAKE) -C editor serve BUN=$(BUN)
 
-# The whole editor - JS, CSS and the repo's presets.toml (PROJECT) - inlined into one
-# stand-alone HTML file that a browser can open straight from disk.
-EDITOR_INPUTS = editor/index.html editor/package.json editor/bun.lock editor/tsconfig.json \
-                $(shell find editor/src -type f) presets.toml
-
-$(BUILD_DIR)/editor.html: $(EDITOR_INPUTS) | $(BUILD_DIR)
+# The whole editor - JS, CSS and both boards' preset banks - inlined into one
+# stand-alone HTML file that a browser can open straight from disk. editor/Makefile keeps
+# editor/dist/editor.html incremental; build/editor.html is the release copy.
+editor-html:
 	$(require_bun)
-	cd editor && $(BUN) install --frozen-lockfile && $(BUN) run typecheck && \
-		$(BUN) build ./index.html --compile --target=browser --minify --outfile=$(CURDIR)/$@
-
-editor-html: $(BUILD_DIR)/editor.html
+	$(MAKE) -C editor html BUN=$(BUN)
+	cp editor/dist/editor.html build/editor.html
 
 .PHONY: editor editor-html
+
+# Both boards' firmware under distinct names, for a GitHub release. The two builds run one
+# after the other: they share build/build_id.c and the CloudSeed sub-make.
+RELEASE_DIR = build/release
+release:
+	$(MAKE) BOARD=terrarium
+	$(MAKE) BOARD=hothouse
+	mkdir -p $(RELEASE_DIR)
+	cp build/terrarium/$(TARGET).bin $(RELEASE_DIR)/$(TARGET)-terrarium.bin
+	cp build/hothouse/$(TARGET).bin $(RELEASE_DIR)/$(TARGET)-hothouse.bin
+
+.PHONY: release
 
 libs:
 	$(MAKE) -C CloudSeed clean all

@@ -10,6 +10,9 @@ talks raw MIDI bytes to the ALSA rawmidi node /dev/snd/midiC<card>D0.
   usb_preset_host.py [--dev PATH] beginabort FILE # BEGIN then ABORT
   usb_preset_host.py [--dev PATH] revert
   usb_preset_host.py [--dev PATH] flood SECONDS   # INFO every 2 ms + READ-all loop, no session
+  usb_preset_host.py [--dev PATH] identity        # MIDI Identity Request -> build id
+  usb_preset_host.py [--dev PATH] dfu             # restart into the Daisy bootloader (DFU)
+  usb_preset_host.py [--dev PATH] load            # audio callback load over the last second
   usb_preset_host.py fnv FILE
 """
 import os, select, sys, time
@@ -54,8 +57,9 @@ class Link:
     def send(self, cmd, body=b""):
         os.write(self.fd, bytes([0xF0]) + HDR + bytes([cmd]) + body + bytes([0xF7]))
 
-    def recv(self, timeout):
-        """Next reply frame of ours: (cmd, status, body) or None on timeout."""
+    def recv_frame(self, timeout, prefix):
+        """Next complete frame (bytes between F0 and F7) starting with `prefix`; other
+        frames are discarded. None on timeout."""
         end = time.monotonic() + timeout
         while True:
             while 0xF0 in self.buf and 0xF7 in self.buf[self.buf.index(0xF0):]:
@@ -63,14 +67,21 @@ class Link:
                 e = self.buf.index(0xF7, s)
                 frame = bytes(self.buf[s + 1:e])
                 del self.buf[:e + 1]
-                if len(frame) >= 5 and frame[:3] == HDR:
-                    return frame[3], frame[4], frame[5:]
+                if frame.startswith(prefix):
+                    return frame
             left = end - time.monotonic()
             if left <= 0:
                 return None
             r, _, _ = select.select([self.fd], [], [], left)
             if r:
                 self.buf += os.read(self.fd, 4096)
+
+    def recv(self, timeout):
+        """Next reply frame of ours: (cmd, status, body) or None on timeout."""
+        f = self.recv_frame(timeout, HDR)
+        if f is None or len(f) < 5:
+            return None
+        return f[3], f[4], f[5:]
 
     def call(self, cmd, body=b"", timeout=1.0):
         self.send(cmd, body)
@@ -91,6 +102,8 @@ def info(link, quiet=False):
     st, b = link.call(0x01)
     d = dict(version=b[0], maxTextBytes=g21(b[1:]), chunkBytes=g14(b[4:]), source=b[6],
              activeLength=g21(b[7:]), activeHash=g32(b[10:]), presetCount=b[15])
+    if len(b) > 16:  # absent in firmware from before currentPreset was added
+        d["currentPreset"] = b[16]
     if not quiet:
         show("INFO", st, " ".join(f"{k}={v:#010x}" if k == "activeHash" else f"{k}={v}"
                                   for k, v in d.items()))
@@ -171,6 +184,23 @@ def main():
                 reads += 1
             time.sleep(0.002)
         print(f"flood: {n} INFO, {reads} READ-all, no errors")
+    elif cmd == "identity":
+        os.write(link.fd, bytes([0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]))
+        f = link.recv_frame(1.0, bytes([0x7E, 0x7F, 0x06, 0x02]))
+        if f is None:
+            sys.exit("timeout waiting for the Identity Reply")
+        print(f"identity: manufacturer={f[4]:02x} family={f[5:7].hex(' ')} "
+              f"member={f[7:9].hex(' ')} version={f[9:13].hex(' ')} "
+              f"build={f[13:].decode('ascii', 'replace')}")
+    elif cmd == "dfu":
+        show("DFU", link.call(0x08)[0])
+        print("the pedal restarts into DFU mode; flash with: make program-dfu")
+    elif cmd == "load":
+        st, b = link.call(0x09)
+        if st != 0:
+            sys.exit(f"LOAD: {STATUS[st]}")
+        print(f"LOAD: avg {g14(b) / 10:.1f}% max {g14(b[2:]) / 10:.1f}% overruns {g14(b[4:])} "
+              f"currentPreset {b[6]}")
     else:
         sys.exit(__doc__)
 

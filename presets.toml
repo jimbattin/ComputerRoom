@@ -1,4 +1,5 @@
-# CloudSeed reverb presets for the Terrarium pedal.
+# CloudSeed reverb presets for the Terrarium pedal (presets_hothouse.toml is the
+# HotHouse bank; each firmware build embeds the bank for its BOARD).
 #
 # This file is compiled into the firmware image (see src/presets_toml.s) and
 # parsed once at boot. Edit values here, then rebuild and reflash:
@@ -13,6 +14,8 @@
 # both LEDs at 5 Hz:
 #   * Plain ASCII only, comments included: a byte >= 0x80 (an em dash, an
 #     accented letter) is rejected, with its line and column.
+#   * board = "terrarium" is required at the top: a bank for another board is
+#     rejected, here and in a USB upload.
 #   * Preset order is the order below. The index is stored in QSPI flash, so
 #     reordering or deleting presets invalidates saved settings (bump
 #     SETTINGS_VERSION in src/pedal_storage.cpp in the same change).
@@ -64,6 +67,10 @@
 #     TapGain    gain of the tap bank, 2-decade curve
 #     TapDecay   how fast tap gain falls across the bank, 0-1
 #     Bloom      on when >= 0.5, reverses the early tap gain order (default SWITCH_2 target)
+#     Scatter       on when >= 0.5: each tap's gain oscillates instead of only falling or
+#                   rising (toggle target early.Scatter)
+#     ScatterRate   Scatter LFO rate, 0.1-5 Hz (2-decade curve; each tap varies it by +-15%)
+#     ScatterDepth  how far each tap's gain dips, 0-1 (0 = static, 1 = down to silence)
 #
 #   [preset.params.early_diffusion]  Early diffusion: allpass chain that smears the early reflections.
 #     DiffusionEnabled         on when >= 0.5: runs the early allpass diffuser
@@ -130,7 +137,8 @@
 #
 # TOGGLE TARGETS (values accepted in [preset.toggle_map]):
 #   delay_lines.max                       delay line count (default SWITCH_1)
-#   early.Bloom                       Bloom (default SWITCH_2)
+#   early.Bloom                           Bloom (default SWITCH_2)
+#   early.Scatter                         Scatter: early tap gains oscillate
 #   reverse.enabled                       reverse voice on (default SWITCH_3)
 #   reverse.direct_mix                    off = reverse feeds the reverb tail, on = reversed reverb
 #                                         mixed into the output (default SWITCH_4)
@@ -147,7 +155,11 @@
 #   late.Interpolation                    late-diffuser allpass interpolation on/off; more CPU
 # Not toggle targets: continuous parameters (a toggle would slam them to 0/1; CrossSeed is one),
 # LineCount (use delay_lines.max), reverse.delay (knob only), InputMix (no effect in mono).
+# The three-position targets delay_lines.select, early.envelope and reverse.mode need a
+# HotHouse toggle (presets_hothouse.toml).
 #
+
+board = "terrarium"
 
 # --------------------------------------------------------------------------
 [[preset]]
@@ -203,6 +215,9 @@ TapLength = 1.0
 TapGain   = 1.0
 TapDecay  = 0.86500012874603271
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -323,6 +338,9 @@ TapLength = 1.0
 TapGain   = 0.83499991893768311
 TapDecay  = 0.86500012874603271
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -443,6 +461,9 @@ TapLength = 0.43999996781349182
 TapGain   = 1.0
 TapDecay  = 1.0
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -563,6 +584,9 @@ TapLength = 0.26499992609024048
 TapGain   = 0.69499999284744263
 TapDecay  = 1.0
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -683,6 +707,9 @@ TapLength = 1.0
 TapGain   = 0.0
 TapDecay  = 0.830000102519989
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -803,6 +830,9 @@ TapLength = 1.0
 TapGain   = 0.90000003576278687
 TapDecay  = 1.0
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -923,6 +953,9 @@ TapLength = 0.43999996781349182
 TapGain   = 0.87999999523162842
 TapDecay  = 1.0
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -1043,6 +1076,9 @@ TapLength = 1
 TapGain   = 0
 TapDecay  = 0.8650001287460327
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -1163,6 +1199,9 @@ TapLength = 1.0
 TapGain   = 1.0
 TapDecay  = 0.71000003814697266
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]
@@ -1283,6 +1322,9 @@ TapLength = 0.9866999983787537
 TapGain   = 1.0
 TapDecay  = 1.0
 Bloom     = 0.0
+Scatter      = 0.0
+ScatterRate  = 0.5
+ScatterDepth = 0.5
 
 # Early diffusion: allpass chain that smears the early reflections.
 [preset.params.early_diffusion]

@@ -1,19 +1,28 @@
-import type { Dispatch } from 'preact/hooks';
-import type { Preset } from '../model/bank';
-import { MAX_NAME_BYTES, TOTAL_LINE_COUNT, formatNorm } from '../model/bank';
-import { badgesFor } from '../model/flow';
-import { formatValue } from '../model/scale';
-import { GROUPS, KNOB_TARGETS, PAGES, PARAMS, TOGGLE_TARGETS, type PageId } from '../model/schema';
+import type { Dispatch } from "preact/hooks";
+import { formatNorm, MAX_NAME_BYTES, type Preset, TOTAL_LINE_COUNT } from "../model/bank";
+import { badgesFor, presentKeys } from "../model/flow";
+import { formatValue } from "../model/scale";
 import {
+  type Board,
+  GROUP_NAMES,
+  PAGES,
+  PARAMS,
+  type PageId,
+  targetDescription,
+  togglePositions,
+} from "../model/schema";
+import {
+  type Action,
+  type MapKind,
+  mapSpec,
+  type PresetChanges,
   SCALAR_PROP,
+  type ScalarField,
   SETUP_FIELDS,
   sanitizeName,
-  type Action,
-  type PresetChanges,
-  type ScalarField,
-} from '../model/state';
-import { Key, NumberField } from './controls';
-import { Fader, SwitchStrip } from './Fader';
+} from "../model/state";
+import { hoverHandlers, Key, NumberField, withOriginal } from "./controls";
+import { Fader, SwitchStrip, ThreeWayStrip } from "./Fader";
 
 interface PageProps {
   preset: Preset;
@@ -23,11 +32,11 @@ interface PageProps {
 }
 
 function pageEdited(page: (typeof PAGES)[number], fields: Record<string, true>): boolean {
-  if (page.id === 'knobs' || page.id === 'toggles') {
-    const prefix = page.id === 'knobs' ? 'knob.' : 'toggle.';
+  if (page.id === "knobs" || page.id === "toggles") {
+    const prefix = page.id === "knobs" ? "knob." : "toggle.";
     return Object.keys(fields).some((f) => f.startsWith(prefix));
   }
-  if (page.id === 'setup') return SETUP_FIELDS.some((f) => fields[f]);
+  if (page.id === "setup") return SETUP_FIELDS.some((f) => fields[f]);
   return page.keys.some((k) => fields[`params.${k}`]);
 }
 
@@ -49,7 +58,7 @@ export function PageKeys({
           wide
           pressed={p.id === page}
           dark
-          mark={pageEdited(p, changes.fields) ? 'edited' : undefined}
+          mark={pageEdited(p, changes.fields) ? "edited" : undefined}
           onClick={() => onPage(p.id)}
         />
       ))}
@@ -66,37 +75,43 @@ export function ParamPage({
   dispatch,
   onHover,
 }: PageProps & { page: PageId; onHover: (key: string | null) => void }) {
-  const keys = PAGES.find((p) => p.id === page)!.keys;
+  const keys = presentKeys(PAGES.find((p) => p.id === page)!.keys, preset);
   return (
     <div class="fader-bank">
       {keys.map((key) => {
-        const def = PARAMS[key];
-        const Strip = def.kind === 'switch' ? SwitchStrip : Fader;
-        const was = changes.original.params[key];
+        const def = PARAMS[key]!;
+        const Strip = def.kind === "switch" ? SwitchStrip : def.kind === "select3" ? ThreeWayStrip : Fader;
+        const was = changes.original.params[key]!;
         return (
           <Strip
             key={key}
             def={def}
-            value={preset.params[key]}
+            value={preset.params[key]!}
             preset={preset}
             badges={badgesFor(preset, key)}
             original={
-              changes.fields[`params.${key}`] ? `${formatValue(key, was, changes.original)} (${formatNorm(was)})` : undefined
+              changes.fields[`params.${key}`]
+                ? `${formatValue(key, was, changes.original)} (${formatNorm(was)})`
+                : undefined
             }
-            onChange={(value) => dispatch({ type: 'setParam', key, value })}
+            onChange={(value) => dispatch({ type: "setParam", key, value })}
             onHover={onHover}
           />
         );
       })}
       {Array.from({ length: Math.max(0, BANK_SLOTS - keys.length) }, (_, i) => (
-        <div key={`empty${i}`} class="strip empty" />
+        <div
+          // biome-ignore lint/suspicious/noArrayIndexKey: slots are positional: index i is empty fader slot i
+          key={`empty${i}`}
+          class="strip empty"
+        />
       ))}
     </div>
   );
 }
 
 /** Dropdown text for targets whose bare name reads badly under its group heading. */
-const OPTION_LABELS: Record<string, string> = { 'reverse.enabled': 'Reverse' };
+const OPTION_LABELS: Record<string, string> = { "reverse.enabled": "Reverse" };
 
 function TargetSelect({
   value,
@@ -112,16 +127,15 @@ function TargetSelect({
   original?: string;
   onChange: (target: string) => void;
 }) {
-  const groups = [...Object.keys(GROUPS), 'reverse', 'delay_lines'];
   return (
     <select
       class="led"
       aria-label={label}
-      title={`${value}: ${PARAMS[value].description}${original === undefined ? '' : `\nOriginal: ${original}`}`}
+      title={withOriginal(`${value}: ${targetDescription(value)}`, original)}
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
     >
-      {groups.map((g) => {
+      {GROUP_NAMES.map((g) => {
         const inGroup = options.filter((t) => t.startsWith(`${g}.`));
         return inGroup.length === 0 ? null : (
           <optgroup key={g} label={g}>
@@ -139,20 +153,36 @@ function TargetSelect({
 
 /** Map banks: index 0 is the `_a` key, 1 the `_b` key. */
 const BANKS = [
-  { letter: 'A', css: 'bank-a', name: 'Primary', note: 'normal playing' },
-  { letter: 'B', css: 'bank-b', name: 'Secondary', note: 'while FS2 is held' },
+  { letter: "A", css: "bank-a", name: "Primary", note: "normal playing" },
+  { letter: "B", css: "bank-b", name: "Secondary", note: "while FS2 is held" },
 ] as const;
 
 interface MapPageProps extends PageProps {
+  /** The bank's board: the toggle count, the toggle positions, and the valid targets. */
+  board: Board;
   /** Reports the target of the slot under the pointer or focus, null on leave. */
   onHover: (key: string | null) => void;
 }
 
-function MapPage({ preset, changes, kind, dispatch, onHover }: MapPageProps & { kind: 'knob' | 'toggle' }) {
-  const map = kind === 'knob' ? preset.knobMap : preset.toggleMap;
-  const originalMap = kind === 'knob' ? changes.original.knobMap : changes.original.toggleMap;
-  const options = kind === 'knob' ? KNOB_TARGETS : TOGGLE_TARGETS;
-  const title = kind === 'knob' ? 'KNOB' : 'SW';
+/** What each lever position of a toggle does with `target`. */
+function TogglePositions({ target, board }: { target: string; board: Board }) {
+  return (
+    <div class="toggle-pos">
+      {togglePositions(target, board).map((p) => (
+        <span key={p.pos} title={`${p.pos}: ${p.text}`}>
+          <span class="pos">{p.pos}</span> {p.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function MapPage({ preset, changes, kind, board, dispatch, onHover }: MapPageProps & { kind: MapKind }) {
+  const { prop, targets } = mapSpec(kind, board);
+  const map = preset[prop];
+  const originalMap = changes.original[prop];
+  const title = kind === "knob" ? "KNOB" : board === "hothouse" ? "TOGGLE" : "SW";
+  const gridClass = kind === "knob" ? "knobs" : board === "hothouse" ? "toggles three" : "toggles";
   return (
     <div>
       <div class="map-legend">
@@ -165,41 +195,31 @@ function MapPage({ preset, changes, kind, dispatch, onHover }: MapPageProps & { 
           </span>
         ))}
       </div>
-      <div class={`map-grid ${kind}s`}>
+      <div class={`map-grid ${gridClass}`}>
         {map[0].map((_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: slots are positional: index i is knob or switch column i
           <div key={i} class="map-col panel">
             <span class="silk">
               {title} {i + 1}
             </span>
             {([0, 1] as const).map((bank) => {
               const b = BANKS[bank];
+              const target = map[bank][i]!;
               const edited = changes.fields[`${kind}.${bank}.${i}`];
               return (
-                <div
-                  key={bank}
-                  class={`map-slot ${b.css}`}
-                  onMouseEnter={() => onHover(map[bank][i])}
-                  onMouseLeave={() => onHover(null)}
-                  onFocusIn={() => onHover(map[bank][i])}
-                  onFocusOut={() => onHover(null)}
-                >
+                <div key={bank} class={`map-slot ${b.css}`} {...hoverHandlers(target, onHover)}>
                   <span class="bank-chip" title={`${b.name}: ${b.note}`}>
                     {b.letter}
                     {edited && <span class="edit-mark" />}
                   </span>
                   <TargetSelect
                     label={`${title} ${i + 1} ${b.letter} ${b.name}`}
-                    value={map[bank][i]}
-                    options={options}
+                    value={target}
+                    options={targets}
                     original={edited ? originalMap[bank][i] : undefined}
-                    onChange={(target) =>
-                      dispatch(
-                        kind === 'knob'
-                          ? { type: 'setKnob', bank, knob: i, target }
-                          : { type: 'setToggle', bank, toggle: i, target },
-                      )
-                    }
+                    onChange={(target) => dispatch({ type: "setTarget", kind, bank, slot: i, target })}
                   />
+                  {kind === "toggle" && <TogglePositions target={target} board={board} />}
                 </div>
               );
             })}
@@ -229,13 +249,13 @@ export function SetupPage({ preset, changes, dispatch }: PageProps) {
         max={max}
         step={step}
         display={String}
-        onCommit={(v) => dispatch({ type: 'setScalar', field, value: v })}
+        onCommit={(v) => dispatch({ type: "setScalar", field, value: v })}
       />
     </label>
   );
   return (
     <div class="setup-grid">
-      <label class="silk" title={was('name')}>
+      <label class="silk" title={was("name")}>
         {changes.fields.name && <span class="edit-mark" />}
         Name
         <input
@@ -248,16 +268,16 @@ export function SetupPage({ preset, changes, dispatch }: PageProps) {
             const name = sanitizeName(el.value);
             // A stripped character leaves the state unchanged, so no re-render would remove it.
             if (name !== el.value) el.value = name;
-            dispatch({ type: 'setName', name });
+            dispatch({ type: "setName", name });
           }}
         />
       </label>
-      {scalar('blinks', 'Blinks', 1, 20)}
-      {scalar('led_on_ms', 'LED on ms', 0, 60000, 10)}
-      {scalar('led_off_ms', 'LED off ms', 0, 60000, 10)}
-      {scalar('led_pause_ms', 'LED pause ms', 0, 60000, 10)}
-      {scalar('default_delay_lines', 'Default lines', 1, Math.min(TOTAL_LINE_COUNT, preset.maxDelayLines))}
-      {scalar('max_delay_lines', 'Max lines', Math.max(1, preset.defaultDelayLines), TOTAL_LINE_COUNT)}
+      {scalar("blinks", "Blinks", 1, 20)}
+      {scalar("led_on_ms", "LED on ms", 0, 60000, 10)}
+      {scalar("led_off_ms", "LED off ms", 0, 60000, 10)}
+      {scalar("led_pause_ms", "LED pause ms", 0, 60000, 10)}
+      {scalar("default_delay_lines", "Default lines", 1, Math.min(TOTAL_LINE_COUNT, preset.maxDelayLines))}
+      {scalar("max_delay_lines", "Max lines", Math.max(1, preset.defaultDelayLines), TOTAL_LINE_COUNT)}
     </div>
   );
 }

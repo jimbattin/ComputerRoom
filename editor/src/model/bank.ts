@@ -2,10 +2,22 @@
 // message for message; edits patch only the value token of one line, so an unedited bank
 // serializes byte-identically (same pedal hash, minimal git diffs).
 
-import { parse } from 'smol-toml';
-import { GROUPS, PARAMETER_ORDER, RUNTIME_PARAMETER, TOGGLE_PARAMS } from './schema';
+import { parse } from "smol-toml";
+import {
+  type Board,
+  delayLinesKey,
+  GROUP_NAMES,
+  GROUPS,
+  groupOf,
+  isBoard,
+  PARAMETER_ORDER,
+  RUNTIME_PARAMETER,
+  THREE_WAY_TARGETS,
+  TOGGLE_PARAMS,
+  toggleCount,
+} from "./schema";
 
-export const MAX_TEXT_BYTES = 98304; // PresetProtocol::kMaxTextBytes
+const MAX_TEXT_BYTES = 98304; // PresetProtocol::kMaxTextBytes
 export const MAX_PRESETS = 16; // kMaxPresets
 export const MAX_NAME_BYTES = 31; // kMaxPresetNameLen - 1
 export const TOTAL_LINE_COUNT = 5; // CloudSeed::TotalLineCount
@@ -22,18 +34,18 @@ export interface Preset {
   params: Record<string, number>;
   /** [0] = _a, [1] = _b; knob 0..5. */
   knobMap: [string[], string[]];
-  /** [0] = _a, [1] = _b; toggle 0..3. */
+  /** [0] = _a, [1] = _b; toggle 0..toggleCount(board)-1. */
   toggleMap: [string[], string[]];
 }
 
 /** Value token columns within a line. */
-export interface FieldLoc {
+interface FieldLoc {
   line: number;
   start: number;
   end: number;
 }
 
-export interface PresetBlock {
+interface PresetBlock {
   /** First line of the block: the separator comment above [[preset]], else the header. */
   start: number;
   /** One past the last line. */
@@ -44,11 +56,11 @@ export interface PresetBlock {
 
 export interface BankDoc {
   lines: string[];
-  eol: '\n' | '\r\n';
+  eol: "\n" | "\r\n";
   presets: PresetBlock[];
 }
 
-export type LoadResult = { ok: true; doc: BankDoc; presets: Preset[] } | { ok: false; error: string };
+export type LoadResult = { ok: true; doc: BankDoc; presets: Preset[]; board: Board } | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------------------------
 // Text layout
@@ -58,26 +70,26 @@ const TABLE = /^\s*\[preset\.(.+)\]\s*(#.*)?$/;
 const KEY = /^\s*([A-Za-z0-9_]+)\s*=\s*/;
 
 export function scanDoc(text: string): BankDoc {
-  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
   const presets: PresetBlock[] = [];
-  let path = '';
+  let path = "";
 
   lines.forEach((line, i) => {
     const trimmed = line.trim();
-    if (trimmed === '[[preset]]') {
+    if (trimmed === "[[preset]]") {
       let start = i;
-      while (start > 0 && SEPARATOR.test(lines[start - 1].trim())) start--;
+      while (start > 0 && SEPARATOR.test(lines[start - 1]!.trim())) start--;
       const prev = presets.at(-1);
       if (prev) prev.end = start;
       presets.push({ start, end: lines.length, header: i, fields: new Map() });
-      path = '';
+      path = "";
       return;
     }
-    if (trimmed === '' || trimmed.startsWith('#')) return;
+    if (trimmed === "" || trimmed.startsWith("#")) return;
     const table = TABLE.exec(line);
     if (table) {
-      path = table[1].trim();
+      path = table[1]!.trim();
       return;
     }
     const key = KEY.exec(line);
@@ -87,14 +99,14 @@ export function scanDoc(text: string): BankDoc {
     let end: number;
     if (line[start] === '"') {
       end = start + 1;
-      while (end < line.length && !(line[end] === '"' && line[end - 1] !== '\\')) end++;
+      while (end < line.length && !(line[end] === '"' && line[end - 1] !== "\\")) end++;
       end = Math.min(end + 1, line.length);
     } else {
-      const hash = line.indexOf('#', start);
+      const hash = line.indexOf("#", start);
       end = hash < 0 ? line.length : hash;
-      while (end > start && /\s/.test(line[end - 1])) end--;
+      while (end > start && /\s/.test(line[end - 1]!)) end--;
     }
-    block.fields.set(path ? `${path}.${key[1]}` : key[1], { line: i, start, end });
+    block.fields.set(path ? `${path}.${key[1]!}` : key[1]!, { line: i, start, end });
   });
 
   return { lines, eol, presets };
@@ -110,18 +122,18 @@ type Table = Record<string, unknown>;
 class Reject extends Error {}
 
 const isTable = (v: unknown): v is Table =>
-  v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date);
+  v !== null && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date);
 
 /** printf("%g"): 6 significant digits, trailing zeros removed, exponent form outside 1e-4..1e6. */
 export function fmtG(v: number): string {
-  if (Number.isNaN(v)) return 'nan';
-  if (!Number.isFinite(v)) return v < 0 ? '-inf' : 'inf';
-  if (v === 0) return Object.is(v, -0) ? '-0' : '0';
-  const [mantissa, expText] = v.toExponential(5).split('e');
+  if (Number.isNaN(v)) return "nan";
+  if (!Number.isFinite(v)) return v < 0 ? "-inf" : "inf";
+  if (v === 0) return Object.is(v, -0) ? "-0" : "0";
+  const [mantissa, expText] = v.toExponential(5).split("e") as [string, string];
   const exp = Number(expText);
-  const strip = (s: string) => (s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s);
+  const strip = (s: string) => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
   if (exp < -4 || exp >= 6) {
-    return `${strip(mantissa)}e${exp < 0 ? '-' : '+'}${String(Math.abs(exp)).padStart(2, '0')}`;
+    return `${strip(mantissa)}e${exp < 0 ? "-" : "+"}${String(Math.abs(exp)).padStart(2, "0")}`;
   }
   return strip(v.toFixed(5 - exp));
 }
@@ -129,8 +141,8 @@ export function fmtG(v: number): string {
 /** toml_double_in, then toml_int_in: any TOML number. */
 function readNumber(t: Table, key: string): number | undefined {
   const v = t[key];
-  if (typeof v === 'number') return v;
-  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === "number") return v;
+  if (typeof v === "bigint") return Number(v);
   return undefined;
 }
 
@@ -150,8 +162,8 @@ function rejectUnknownKeys(t: Table, allowed: readonly string[], context: string
   }
 }
 
-const GROUP_NAMES = Object.keys(GROUPS);
-const groupOf = (name: string) => GROUP_NAMES.find((g) => GROUPS[g].includes(name));
+const PARAM_GROUPS = Object.keys(GROUPS);
+const PARAMETER_NAMES: ReadonlySet<string> = new Set(PARAMETER_ORDER);
 
 function readPseudo(t: Table, group: string, key: string, index: number): number {
   const v = readNumber(t, key);
@@ -160,13 +172,13 @@ function readPseudo(t: Table, group: string, key: string, index: number): number
   return v;
 }
 
-function parseParams(preset: Table, index: number, out: Record<string, number>): void {
+function parseParams(preset: Table, board: Board, index: number, out: Record<string, number>): void {
   const params = preset.params;
   if (!isTable(params)) throw new Reject(`preset ${index}: missing [preset.params]`);
-  rejectUnknownKeys(params, [...GROUP_NAMES, 'reverse', 'delay_lines'], `preset ${index}: [preset.params]: `);
+  rejectUnknownKeys(params, GROUP_NAMES, `preset ${index}: [preset.params]: `);
 
   const seen = new Set<string>();
-  for (const g of GROUP_NAMES) {
+  for (const g of PARAM_GROUPS) {
     const group = params[g];
     if (!isTable(group)) throw new Reject(`preset ${index}: missing [preset.params.${g}]`);
     const keys = Object.keys(group);
@@ -174,7 +186,7 @@ function parseParams(preset: Table, index: number, out: Record<string, number>):
       throw new Reject(`preset ${index}: group '${g}' must contain only parameter values`);
     }
     for (const key of keys) {
-      if (!(PARAMETER_ORDER as readonly string[]).includes(key)) {
+      if (!PARAMETER_NAMES.has(key)) {
         throw new Reject(`preset ${index}: unknown parameter '${key}'`);
       }
       if (key === RUNTIME_PARAMETER) {
@@ -199,18 +211,26 @@ function parseParams(preset: Table, index: number, out: Record<string, number>):
 
   const reverse = params.reverse;
   if (!isTable(reverse)) throw new Reject(`preset ${index}: missing [preset.params.reverse]`);
-  rejectUnknownKeys(reverse, ['delay', 'enabled', 'direct_mix'], `preset ${index}: [preset.params.reverse]: `);
-  for (const key of ['delay', 'enabled', 'direct_mix']) out[`reverse.${key}`] = readPseudo(reverse, 'reverse', key, index);
+  rejectUnknownKeys(reverse, ["delay", "enabled", "direct_mix"], `preset ${index}: [preset.params.reverse]: `);
+  for (const key of ["delay", "enabled", "direct_mix"])
+    out[`reverse.${key}`] = readPseudo(reverse, "reverse", key, index);
 
+  // Terrarium: `max` (Max when >= 0.5, else Default). HotHouse: `select`, exactly 0 / 0.5 / 1
+  // (One / Default / Max), compared as the float the firmware stores.
   const delayLines = params.delay_lines;
   if (!isTable(delayLines)) throw new Reject(`preset ${index}: missing [preset.params.delay_lines]`);
-  rejectUnknownKeys(delayLines, ['max'], `preset ${index}: [preset.params.delay_lines]: `);
-  out['delay_lines.max'] = readPseudo(delayLines, 'delay_lines', 'max', index);
+  const key = delayLinesKey(board);
+  rejectUnknownKeys(delayLines, [key], `preset ${index}: [preset.params.delay_lines]: `);
+  const stored = readPseudo(delayLines, "delay_lines", key, index);
+  if (board === "hothouse" && ![0, 0.5, 1].includes(Math.fround(stored))) {
+    throw new Reject(`preset ${index}: 'delay_lines.select' must be 0, 0.5 or 1`);
+  }
+  out[`delay_lines.${key}`] = stored;
 }
 
 /** splitTarget + resolveParamTarget: "group.Parameter" naming a file-controlled parameter. */
 function splitTarget(text: string, map: string, key: string, index: number): [string, string] {
-  const dot = text.indexOf('.');
+  const dot = text.indexOf(".");
   if (dot <= 0 || dot === text.length - 1) {
     throw new Reject(`preset ${index}: ${map}: ${key}: '${text}' must be "group.Parameter"`);
   }
@@ -219,34 +239,42 @@ function splitTarget(text: string, map: string, key: string, index: number): [st
 
 function resolveParamTarget(text: string, group: string, name: string, map: string, key: string, index: number): void {
   const where = `preset ${index}: ${map}: ${key}: `;
-  if (!GROUP_NAMES.includes(group)) throw new Reject(`${where}unknown group in '${text}'`);
-  if (!(PARAMETER_ORDER as readonly string[]).includes(name)) throw new Reject(`${where}unknown parameter '${name}'`);
+  if (!PARAM_GROUPS.includes(group)) throw new Reject(`${where}unknown group in '${text}'`);
+  if (!PARAMETER_NAMES.has(name)) throw new Reject(`${where}unknown parameter '${name}'`);
   if (name === RUNTIME_PARAMETER) throw new Reject(`${where}'${name}' is runtime-controlled and cannot be mapped`);
   if (groupOf(name) !== group) throw new Reject(`${where}'${name}' is not in group '${group}'`);
 }
 
 function parseKnobTarget(text: string, key: string, index: number): void {
-  const [group, name] = splitTarget(text, 'knob_map', key, index);
-  if (group === 'reverse') {
-    if (name !== 'delay') throw new Reject(`preset ${index}: knob_map: ${key}: 'reverse' has only 'delay'`);
+  const [group, name] = splitTarget(text, "knob_map", key, index);
+  if (group === "reverse") {
+    if (name !== "delay") throw new Reject(`preset ${index}: knob_map: ${key}: 'reverse' has only 'delay'`);
     return;
   }
-  resolveParamTarget(text, group, name, 'knob_map', key, index);
+  resolveParamTarget(text, group, name, "knob_map", key, index);
 }
 
-function parseToggleTarget(text: string, key: string, index: number): void {
-  const [group, name] = splitTarget(text, 'toggle_map', key, index);
-  if (group === 'delay_lines') {
-    if (name !== 'max') throw new Reject(`preset ${index}: toggle_map: ${key}: 'delay_lines' has only 'max'`);
-    return;
+function parseToggleTarget(text: string, board: Board, key: string, index: number): void {
+  const [group, name] = splitTarget(text, "toggle_map", key, index);
+  let known = true;
+  if (group === "delay_lines") {
+    if (name !== "max" && name !== "select") {
+      throw new Reject(`preset ${index}: toggle_map: ${key}: 'delay_lines' toggles only 'max' or 'select'`);
+    }
+  } else if (group === "reverse") {
+    if (name !== "enabled" && name !== "direct_mix" && name !== "mode") {
+      throw new Reject(`preset ${index}: toggle_map: ${key}: 'reverse' toggles only 'enabled', 'direct_mix' or 'mode'`);
+    }
+  } else if (group !== "early" || name !== "envelope") {
+    known = false;
   }
-  if (group === 'reverse') {
-    if (name !== 'enabled' && name !== 'direct_mix') {
-      throw new Reject(`preset ${index}: toggle_map: ${key}: 'reverse' toggles only 'enabled' or 'direct_mix'`);
+  if (known) {
+    if (THREE_WAY_TARGETS.includes(text) && board !== "hothouse") {
+      throw new Reject(`preset ${index}: toggle_map: ${key}: '${text}' needs a three-position toggle`);
     }
     return;
   }
-  resolveParamTarget(text, group, name, 'toggle_map', key, index);
+  resolveParamTarget(text, group, name, "toggle_map", key, index);
   if (!TOGGLE_PARAMS.includes(name)) {
     throw new Reject(`preset ${index}: toggle_map: ${key}: '${name}' is not an on/off parameter`);
   }
@@ -255,30 +283,38 @@ function parseToggleTarget(text: string, key: string, index: number): void {
 function parseMap(
   preset: Table,
   index: number,
-  map: 'knob_map' | 'toggle_map',
+  map: "knob_map" | "toggle_map",
   count: number,
   resolve: (text: string, key: string, index: number) => void,
 ): [string[], string[]] {
-  const noun = map === 'knob_map' ? 'knob' : 'toggle';
+  const noun = map === "knob_map" ? "knob" : "toggle";
   const table = preset[map];
   if (!isTable(table)) throw new Reject(`preset ${index}: missing [preset.${map}]`);
-  const keys = ['a', 'b'].map((bank) => Array.from({ length: count }, (_, i) => `${noun}${i + 1}_${bank}`));
+  const keys = ["a", "b"].map((bank) => Array.from({ length: count }, (_, i) => `${noun}${i + 1}_${bank}`));
   rejectUnknownKeys(table, keys.flat(), `preset ${index}: [preset.${map}]: `);
   const out: [string[], string[]] = [[], []];
-  keys.forEach((bankKeys, bank) =>
-    bankKeys.forEach((key) => {
+  keys.forEach((bankKeys, bank) => {
+    for (const key of bankKeys) {
       const value = table[key];
-      if (typeof value !== 'string') throw new Reject(`preset ${index}: ${map}: missing or non-string '${key}'`);
+      if (typeof value !== "string") throw new Reject(`preset ${index}: ${map}: missing or non-string '${key}'`);
       resolve(value, key, index);
-      out[bank].push(value);
-    }),
-  );
+      out[bank]!.push(value);
+    }
+  });
   return out;
 }
 
 const PRESET_KEYS = [
-  'name', 'blinks', 'led_on_ms', 'led_off_ms', 'led_pause_ms',
-  'default_delay_lines', 'max_delay_lines', 'params', 'knob_map', 'toggle_map',
+  "name",
+  "blinks",
+  "led_on_ms",
+  "led_off_ms",
+  "led_pause_ms",
+  "default_delay_lines",
+  "max_delay_lines",
+  "params",
+  "knob_map",
+  "toggle_map",
 ];
 
 function readOptionalMs(preset: Table, key: string, index: number, fallback: number): number {
@@ -294,35 +330,37 @@ function readLineCount(preset: Table, key: string, index: number): number {
   return lines;
 }
 
-function parsePreset(preset: Table, index: number): Preset {
+function parsePreset(preset: Table, board: Board, index: number): Preset {
   rejectUnknownKeys(preset, PRESET_KEYS, `preset ${index}: `);
 
   const name = preset.name;
-  if (typeof name !== 'string') throw new Reject(`preset ${index}: missing name`);
+  if (typeof name !== "string") throw new Reject(`preset ${index}: missing name`);
   const nameBytes = new TextEncoder().encode(name).length;
   if (nameBytes === 0) throw new Reject(`preset ${index}: empty name`);
   if (nameBytes > MAX_NAME_BYTES) throw new Reject(`preset ${index}: name longer than ${MAX_NAME_BYTES} bytes`);
 
   // toml_int_in: an integer literal only, so `3.0` is rejected like the firmware does.
   const blinks = preset.blinks;
-  if (typeof blinks !== 'bigint' || blinks < 1n || blinks > 20n) {
+  if (typeof blinks !== "bigint" || blinks < 1n || blinks > 20n) {
     throw new Reject(`preset ${index}: blinks out of range 1..20`);
   }
 
-  const ledOnMs = readOptionalMs(preset, 'led_on_ms', index, 150);
-  const ledOffMs = readOptionalMs(preset, 'led_off_ms', index, 150);
-  const ledPauseMs = readOptionalMs(preset, 'led_pause_ms', index, 5000);
+  const ledOnMs = readOptionalMs(preset, "led_on_ms", index, 150);
+  const ledOffMs = readOptionalMs(preset, "led_off_ms", index, 150);
+  const ledPauseMs = readOptionalMs(preset, "led_pause_ms", index, 5000);
 
-  const maxDelayLines = readLineCount(preset, 'max_delay_lines', index);
-  const defaultDelayLines = readLineCount(preset, 'default_delay_lines', index);
+  const maxDelayLines = readLineCount(preset, "max_delay_lines", index);
+  const defaultDelayLines = readLineCount(preset, "default_delay_lines", index);
   if (defaultDelayLines > maxDelayLines) {
     throw new Reject(`preset ${index}: default_delay_lines exceeds max_delay_lines`);
   }
 
   const params: Record<string, number> = {};
-  parseParams(preset, index, params);
-  const knobMap = parseMap(preset, index, 'knob_map', 6, parseKnobTarget);
-  const toggleMap = parseMap(preset, index, 'toggle_map', 4, parseToggleTarget);
+  parseParams(preset, board, index, params);
+  const knobMap = parseMap(preset, index, "knob_map", 6, parseKnobTarget);
+  const toggleMap = parseMap(preset, index, "toggle_map", toggleCount(board), (text, key, i) =>
+    parseToggleTarget(text, board, key, i),
+  );
 
   return {
     name,
@@ -344,7 +382,9 @@ function checkAscii(bytes: Uint8Array): void {
   let column = 1;
   for (const b of bytes) {
     if (b >= 0x80) {
-      throw new Reject(`line ${line}, column ${column}: non-ASCII byte 0x${b.toString(16).toUpperCase().padStart(2, '0')}`);
+      throw new Reject(
+        `line ${line}, column ${column}: non-ASCII byte 0x${b.toString(16).toUpperCase().padStart(2, "0")}`,
+      );
     }
     if (b === 0x0a) {
       line++;
@@ -364,14 +404,24 @@ function fieldKeys(preset: Table): string[] {
       else out.push(`${prefix}${k}`);
     }
   };
-  walk(preset, '');
+  walk(preset, "");
   return out;
 }
 
-function validate(text: string): { doc: BankDoc; presets: Preset[] } {
+/** checkBoard: the root `board` key, checked before anything else in the document. */
+function checkBoard(root: Table, board: Board): void {
+  const value = root.board;
+  if (typeof value !== "string") throw new Reject(`missing board = "${board}"`);
+  // The firmware copies the name into a 16-byte buffer for its messages.
+  const name = value.slice(0, 15);
+  if (!isBoard(value)) throw new Reject(`board '${name}' is not "terrarium" or "hothouse"`);
+  if (value !== board) throw new Reject(`bank is for board "${name}", this pedal is "${board}"`);
+}
+
+function validate(text: string, pedal: Board | undefined): { doc: BankDoc; presets: Preset[]; board: Board } {
   const bytes = new TextEncoder().encode(text);
-  if (bytes.length === 0) throw new Reject('empty preset text');
-  if (bytes.includes(0)) throw new Reject('NUL byte in preset text');
+  if (bytes.length === 0) throw new Reject("empty preset text");
+  if (bytes.includes(0)) throw new Reject("NUL byte in preset text");
   if (bytes.length > MAX_TEXT_BYTES) {
     throw new Reject(`text is ${bytes.length} bytes; the pedal accepts at most ${MAX_TEXT_BYTES}`);
   }
@@ -381,19 +431,23 @@ function validate(text: string): { doc: BankDoc; presets: Preset[] } {
   try {
     root = parse(text, { integersAsBigInt: true }) as Table;
   } catch (e) {
-    throw new Reject(`toml: ${String((e as Error).message).split('\n')[0]}`);
+    throw new Reject(`toml: ${String((e as Error).message).split("\n")[0]}`);
   }
 
+  // Without a pedal to check against, the bank is read for the board it names (else a Terrarium).
+  const board = pedal ?? (isBoard(root.board) ? root.board : "terrarium");
+  checkBoard(root, board);
+
   const array = root.preset;
-  if (!Array.isArray(array)) throw new Reject('missing [[preset]] array');
+  if (!Array.isArray(array)) throw new Reject("missing [[preset]] array");
   if (array.length < 1 || array.length > MAX_PRESETS) {
     throw new Reject(`preset count ${array.length} out of range 1..${MAX_PRESETS}`);
   }
-  rejectUnknownKeys(root, ['preset'], '');
+  rejectUnknownKeys(root, ["board", "preset"], "");
 
   const presets = array.map((p, i) => {
     if (!isTable(p)) throw new Reject(`preset ${i}: not a table`);
-    return parsePreset(p, i);
+    return parsePreset(p, board, i);
   });
 
   const doc = scanDoc(text);
@@ -402,17 +456,22 @@ function validate(text: string): { doc: BankDoc; presets: Preset[] } {
   }
   (array as Table[]).forEach((p, i) => {
     for (const field of fieldKeys(p)) {
-      if (!doc.presets[i].fields.has(field)) {
+      if (!doc.presets[i]!.fields.has(field)) {
         throw new Reject(`preset ${i}: '${field}' must be on its own "key = value" line to be editable`);
       }
     }
   });
-  return { doc, presets };
+  return { doc, presets, board };
 }
 
-export function loadBank(text: string): LoadResult {
+/**
+ * Parses and validates `text` as ParsePresetBankText() does on a pedal of board `pedal`. Without
+ * `pedal`, the bank is checked for the board its `board` key names (a Terrarium if that key is
+ * missing or unknown), so the result's `board` is the bank's own.
+ */
+export function loadBank(text: string, pedal?: Board): LoadResult {
   try {
-    return { ok: true, ...validate(text) };
+    return { ok: true, ...validate(text, pedal) };
   } catch (e) {
     if (e instanceof Reject) return { ok: false, error: e.message };
     throw e;
@@ -425,24 +484,30 @@ export function loadBank(text: string): LoadResult {
 /** A 0..1 value as a TOML float literal: at most 6 decimals, always with a decimal point. */
 export function formatNorm(v: number): string {
   const s = Number(v.toFixed(6)).toString();
-  return s.includes('.') ? s : `${s}.0`;
+  return s.includes(".") ? s : `${s}.0`;
 }
 
-const OPTIONAL_MS = ['led_on_ms', 'led_off_ms', 'led_pause_ms'];
+const OPTIONAL_MS = ["led_on_ms", "led_off_ms", "led_pause_ms"];
+
+function presetBlock(doc: BankDoc, preset: number): PresetBlock {
+  const block = doc.presets[preset];
+  if (!block) throw new Error(`no preset ${preset}`);
+  return block;
+}
 
 /** Replaces one field's value token; an absent optional LED timing is inserted after blinks. */
 export function setField(doc: BankDoc, preset: number, field: string, literal: string): BankDoc {
-  const block = doc.presets[preset];
+  const block = presetBlock(doc, preset);
   const loc = block.fields.get(field);
   if (!loc) {
-    const blinks = block.fields.get('blinks');
+    const blinks = block.fields.get("blinks");
     if (!OPTIONAL_MS.includes(field) || !blinks) throw new Error(`preset ${preset}: no field '${field}'`);
     const lines = [...doc.lines];
     lines.splice(blinks.line + 1, 0, `${field} = ${literal}`);
     return scanDoc(lines.join(doc.eol));
   }
   const lines = [...doc.lines];
-  const line = lines[loc.line];
+  const line = lines[loc.line]!;
   lines[loc.line] = line.slice(0, loc.start) + literal + line.slice(loc.end);
   const fields = new Map(block.fields);
   fields.set(field, { ...loc, end: loc.start + literal.length });
@@ -453,20 +518,20 @@ export function setField(doc: BankDoc, preset: number, field: string, literal: s
 
 function trimTrailingBlank(lines: string[]): string[] {
   let end = lines.length;
-  while (end > 0 && lines[end - 1] === '') end--;
+  while (end > 0 && lines[end - 1] === "") end--;
   return lines.slice(0, end);
 }
 
 /** Appends a copy of preset `i`'s block at the end of the bank. */
 export function duplicatePreset(doc: BankDoc, i: number): BankDoc {
-  const { start, end } = doc.presets[i];
+  const { start, end } = presetBlock(doc, i);
   const block = trimTrailingBlank(doc.lines.slice(start, end));
-  return scanDoc([...trimTrailingBlank(doc.lines), '', ...block, ''].join(doc.eol));
+  return scanDoc([...trimTrailingBlank(doc.lines), "", ...block, ""].join(doc.eol));
 }
 
 /** Removes preset `i`'s block; later presets move down one slot. */
 export function deletePreset(doc: BankDoc, i: number): BankDoc {
-  const { start, end } = doc.presets[i];
+  const { start, end } = presetBlock(doc, i);
   const lines = [...doc.lines.slice(0, start), ...doc.lines.slice(end)];
-  return scanDoc([...trimTrailingBlank(lines), ''].join(doc.eol));
+  return scanDoc([...trimTrailingBlank(lines), ""].join(doc.eol));
 }

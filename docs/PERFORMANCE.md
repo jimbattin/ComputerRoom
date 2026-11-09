@@ -154,7 +154,7 @@ unnecessary.
 `CloudSeed/MultitapDiffuser.cpp`, `CloudSeed/AllpassDiffuser.h`, `CloudSeed/ReverbChannel.h`;
 test `tests/engine_alloc_test.cpp`
 
-Knob and toggle targets are applied inside the audio callback, and 17 of the 47 parameters
+Knob and toggle targets are applied inside the audio callback, and 17 of the 47 parameters (the count at the time)
 allocated on the heap when written. `ShaRandom::Generate()` built its result from
 `std::vector`s, and each `sha256()` call returned a new one. `ReverbChannel::UpdateLines()`
 regenerated the delay-line seed series (4 SHA-256 digests) on every `LineDelay`, `LineDecay`,
@@ -259,7 +259,7 @@ normalised). Memory cost, from the linker report:
 
 1. **Build** (at the time of §1-§8; current memory figures are in CLAUDE.md, "Memory
    Usage"): `make libs && make clean && make` completes with no errors and produces
-   `build/cloudseed.bin`/`.elf`/`.hex`. Memory usage then: SDRAM 77.10% of 64MB, SRAM
+   `build/cloudseed.bin`/`.elf`/`.hex` (now `build/<board>/`). Memory usage then: SDRAM 77.10% of 64MB, SRAM
    (`.text`+`.data`) 28.48% of 480KB `BOOT_SRAM`.
 2. **Host-side behavioral smoke test**: a throwaway harness linked `ReverbController`
    against a `malloc`-backed stand-in for `custom_pool_allocate`, drove `LineCount`

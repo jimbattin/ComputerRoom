@@ -34,12 +34,23 @@ static uint32_t readU32(const uint8_t* p) {
 // Frame body between F0 and F7.
 static Bytes frame(uint8_t cmd) { return Bytes{0x7D, 0x43, 0x53, cmd}; }
 
-// Every reply is one well-formed SysEx message of ours: F0 7D 43 53 <cmd|0x40> <status>
-// ... F7, at most kMaxReply bytes, with every byte in between below 0x80.
+// Every reply is one well-formed SysEx message: either ours, F0 7D 43 53 <cmd|0x40>
+// <status> ... F7, at most kMaxReply bytes, with every byte in between below 0x80; or
+// an Identity Reply, F0 7E 7F 06 02 7D 43 53 <board> 00 00 00 00 00 <printable build id> F7.
 static void checkReplyWellFormed(const PresetProtocol& p) {
     const size_t n = p.ReplyLength();
     if (n == 0) return;
     const uint8_t* r = p.Reply();
+    if (n > 1 && r[1] == 0x7E) {
+        static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x43, 0x53};
+        static const uint8_t kZeros[5] = {};
+        bool ok = n >= 16 && n <= 14 + PresetProtocol::kMaxBuildId + 1
+                  && memcmp(r, kHead, sizeof kHead) == 0 && r[8] < 0x80
+                  && memcmp(r + 9, kZeros, sizeof kZeros) == 0 && r[n - 1] == 0xF7;
+        for (size_t i = 14; ok && i + 1 < n; ++i) ok = r[i] >= 0x20 && r[i] <= 0x7E;
+        CHECK(ok);
+        return;
+    }
     bool ok = n >= 7 && n <= PresetProtocol::kMaxReply && r[0] == 0xF0
               && r[1] == kSysExManufacturer && r[2] == kSysExTag0 && r[3] == kSysExTag1
               && (r[4] & 0x40) != 0 && r[n - 1] == 0xF7;
@@ -58,12 +69,13 @@ struct Fixture {
     std::vector<char> rx = std::vector<char>(PresetProtocol::kMaxTextBytes);
     std::string activeText;
     explicit Fixture(std::string text = defaultActiveText(), BankValidator v = stubValidator,
-                     uint32_t hash = 0, bool useHash = false)
+                     uint32_t hash = 0, bool useHash = false,
+                     const char* buildId = "1a2b3c4+dirty", uint8_t board = 0)
         : activeText(text) {
         ActiveBank active = {activeText.c_str(), (uint32_t)activeText.size(),
                              useHash ? hash : Fnv1a32(activeText.data(), (uint32_t)activeText.size()),
                              true, 7};
-        proto.Init(rx.data(), v, active);
+        proto.Init(rx.data(), v, active, buildId, board);
     }
     UploadAction send(const Bytes& f, uint32_t now = 0) {
         const UploadAction a = proto.Handle(f.data(), f.size(), now);
@@ -112,30 +124,31 @@ static void testAssembler() {
     CHECK(memcmp(a.Frame(), "\x7D\x43\x53\x01", 4) == 0);
 
     // A frame arriving while the slot is busy is dropped entirely.
-    const uint8_t busy[] = {0xF0, 0x11, 0x22, 0xF7};
+    const uint8_t busy[] = {0xF0, 0x7D, 0x43, 0x53, 0x02, 0xF7};
     a.Feed(busy, sizeof busy);
     CHECK(a.Ready() && a.Length() == 4 && a.Frame()[0] == 0x7D);
     a.Release();
     CHECK(!a.Ready());
-    const uint8_t next[] = {0xF0, 0x01, 0x02, 0xF7};
+    const uint8_t next[] = {0xF0, 0x7D, 0x43, 0x53, 0x07, 0xF7};
     a.Feed(next, sizeof next);
-    CHECK(a.Ready() && a.Length() == 2 && a.Frame()[1] == 0x02);
+    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[3] == 0x07);
     a.Release();
 
     // 257 data bytes overflow the slot: never ready.
-    Bytes big(1, 0xF0);
-    big.insert(big.end(), SysExAssembler::kMaxFrame + 1, 0x11);
+    Bytes big{0xF0, 0x7D, 0x43, 0x53};
+    big.insert(big.end(), SysExAssembler::kMaxFrame + 1 - 3, 0x11);
     big.push_back(0xF7);
     a.Feed(big.data(), big.size());
     CHECK(!a.Ready());
     // Exactly kMaxFrame bytes fit.
-    big.erase(big.begin() + 1);
+    big.erase(big.begin() + 4);
     a.Feed(big.data(), big.size());
     CHECK(a.Ready() && a.Length() == SysExAssembler::kMaxFrame);
     a.Release();
 
     // A stray status byte (note on) aborts the frame; its F7 then completes nothing.
-    const uint8_t stray[] = {0xF0, 0x01, 0x90, 0x40, 0x7F, 0x02, 0xF7};
+    // Without the abort this would be a valid frame of ours.
+    const uint8_t stray[] = {0xF0, 0x7D, 0x43, 0x53, 0x90, 0x40, 0x7F, 0x01, 0xF7};
     a.Feed(stray, sizeof stray);
     CHECK(!a.Ready());
 }
@@ -163,9 +176,10 @@ static void testPacker() {
 
 static void testInfo() {
     Fixture fx;
+    fx.proto.SetCurrentPreset(8);
     fx.send(frame(0x01));
     const uint8_t* r = fx.proto.Reply();
-    CHECK(fx.proto.ReplyLength() == 23);
+    CHECK(fx.proto.ReplyLength() == 24);
     CHECK(fx.replyCmd() == 0x41 && fx.status() == 0);
     CHECK(r[6] == kProtocolVersion);
     CHECK(readU21(r + 7) == PresetProtocol::kMaxTextBytes);
@@ -174,7 +188,8 @@ static void testInfo() {
     CHECK(readU21(r + 13) == 1000);
     CHECK(readU32(r + 16) == Fnv1a32(fx.activeText.data(), 1000));
     CHECK(r[21] == 7);
-    CHECK(r[22] == 0xF7);
+    CHECK(r[22] == 8);  // currentPreset
+    CHECK(r[23] == 0xF7);
 }
 
 static void testUpload() {
@@ -338,20 +353,17 @@ static void testAssemblerEdges() {
     a.Feed(lone, sizeof lone);
     CHECK(!a.Ready());
 
-    const uint8_t empty[] = {0xF0, 0xF7};  // empty frame: ready, and ignored by Handle
+    const uint8_t empty[] = {0xF0, 0xF7};  // empty frame: dropped
     a.Feed(empty, sizeof empty);
-    CHECK(a.Ready() && a.Length() == 0);
-    Fixture fx;
-    fx.proto.Handle(a.Frame(), a.Length(), 0);
-    CHECK(fx.proto.ReplyLength() == 0);
-    a.Release();
+    CHECK(!a.Ready());
 
-    const uint8_t restart[] = {0xF0, 0x11, 0x22, 0xF0, 0x33, 0x44, 0xF7};  // a new F0 restarts
+    // a new F0 restarts
+    const uint8_t restart[] = {0xF0, 0x11, 0x22, 0xF0, 0x7D, 0x43, 0x53, 0x01, 0xF7};
     a.Feed(restart, sizeof restart);
-    CHECK(a.Ready() && a.Length() == 2 && a.Frame()[0] == 0x33 && a.Frame()[1] == 0x44);
+    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[0] == 0x7D && a.Frame()[3] == 0x01);
     const uint8_t clock[] = {0xF8, 0xFE};  // real-time bytes while busy leave the frame intact
     a.Feed(clock, sizeof clock);
-    CHECK(a.Ready() && a.Length() == 2 && a.Frame()[0] == 0x33);
+    CHECK(a.Ready() && a.Length() == 4 && a.Frame()[0] == 0x7D);
     a.Release();
 }
 
@@ -457,7 +469,7 @@ static void testFlashFailures() {
 // (libdaisy/src/hid/usb_midi.cpp:163-195) and fed to the assembler one packet at a time.
 static PresetBank gCheckBank;
 static bool realValidator(const char* t, uint32_t n, char* err, int errLen) {
-    return ParsePresetBankText(t, n, gCheckBank, err, errLen, malloc, free);
+    return ParsePresetBankText(t, n, Board_Terrarium, gCheckBank, err, errLen, malloc, free);
 }
 
 static void deliver(Fixture& fx, SysExAssembler& as, const Bytes& body) {
@@ -527,13 +539,142 @@ static void testEndToEnd(const char* fixturePath) {
     bad.replace(at, 12, "\nblinks = 99\n");
     char expected[128];
     PresetBank scratch;
-    CHECK(!ParsePresetBankText(bad.data(), (uint32_t)bad.size(), scratch, expected,
+    CHECK(!ParsePresetBankText(bad.data(), (uint32_t)bad.size(), Board_Terrarium, scratch, expected,
                                sizeof expected, malloc, free));
     CHECK(uploadOverUsb(fx, bad) == UploadAction::None);
     CHECK(fx.replyCmd() == 0x44 && fx.status() == (int)UploadStatus::ParseError);
     const size_t len = strlen(expected);
     CHECK(fx.proto.ReplyLength() == 6 + len + 1);
     CHECK(memcmp(fx.proto.Reply() + 6, expected, len) == 0);
+}
+
+static void testAssemblerBurst() {
+    SysExAssembler a;
+    // Other devices' frames under the same non-commercial ID, then ours, in one transfer.
+    const uint8_t burst[] = {0xF0, 0x7D, 0x70, 0x01, 0x06, 0xF7, 0xF0, 0x7D, 0x33, 0x01,
+                             0x13, 0xF7, 0xF0, 0x7D, 0x29, 0x01, 0x70, 0x44, 0x46, 0x55,
+                             0xF7, 0xF0, 0x7D, 0x43, 0x53, 0x08, 0xF7};
+    a.Feed(burst, sizeof burst);
+    CHECK(a.Ready() && a.Length() == 4);
+    CHECK(memcmp(a.Frame(), "\x7D\x43\x53\x08", 4) == 0);
+    a.Release();
+
+    // A foreign frame, then an Identity Request.
+    const uint8_t ident[] = {0xF0, 0x7D, 0x70, 0x01, 0x01, 0xF7, 0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7};
+    a.Feed(ident, sizeof ident);
+    CHECK(a.Ready() && a.Length() == 4 && memcmp(a.Frame(), "\x7E\x7F\x06\x01", 4) == 0);
+    a.Release();
+
+    // An echoed Identity Reply is not latched.
+    const uint8_t echo[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x43, 0x53,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0xF7};
+    a.Feed(echo, sizeof echo);
+    CHECK(!a.Ready());
+
+    // A generic HELLO under a different family is not latched.
+    const uint8_t hello[] = {0xF0, 0x7D, 0x43, 0x01, 0x01, 0xF7};
+    a.Feed(hello, sizeof hello);
+    CHECK(!a.Ready());
+}
+
+static std::string identityBuildId(const PresetProtocol& p) {
+    if (p.ReplyLength() < 15) return std::string();
+    return std::string(reinterpret_cast<const char*>(p.Reply()) + 14, p.ReplyLength() - 15);
+}
+
+static void testIdentity() {
+    static const uint8_t kHead[] = {0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x7D, 0x43,
+                                    0x53, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    {
+        Fixture fx;
+        CHECK(fx.send({0x7E, 0x7F, 0x06, 0x01}) == UploadAction::None);
+        CHECK(fx.proto.ReplyLength() == 28);
+        CHECK(memcmp(fx.proto.Reply(), kHead, sizeof kHead) == 0);
+        CHECK(identityBuildId(fx.proto) == "1a2b3c4+dirty");
+        CHECK(fx.proto.Reply()[27] == 0xF7);
+        CHECK(!fx.proto.SessionActive());
+
+        // Any device id is answered the same way.
+        fx.send({0x7E, 0x10, 0x06, 0x01});
+        CHECK(fx.proto.ReplyLength() == 28 && identityBuildId(fx.proto) == "1a2b3c4+dirty");
+
+        // Other Universal Non-Real-Time shapes get no reply.
+        fx.send({0x7E, 0x7F, 0x06, 0x01, 0x00});
+        CHECK(fx.proto.ReplyLength() == 0);
+        fx.send({0x7E, 0x7F, 0x06, 0x02});
+        CHECK(fx.proto.ReplyLength() == 0);
+    }
+    {
+        Fixture empty(defaultActiveText(), stubValidator, 0, false, "");
+        empty.send({0x7E, 0x7F, 0x06, 0x01});
+        CHECK(identityBuildId(empty.proto) == "unknown");
+        Fixture null(defaultActiveText(), stubValidator, 0, false, nullptr);
+        null.send({0x7E, 0x7F, 0x06, 0x01});
+        CHECK(identityBuildId(null.proto) == "unknown");
+
+        const std::string longId(40, 'a');
+        Fixture lng(defaultActiveText(), stubValidator, 0, false, longId.c_str());
+        lng.send({0x7E, 0x7F, 0x06, 0x01});
+        CHECK(lng.proto.ReplyLength() == 47 && identityBuildId(lng.proto) == std::string(32, 'a'));
+
+        Fixture ctl(defaultActiveText(), stubValidator, 0, false, "ab\x01" "c");
+        ctl.send({0x7E, 0x7F, 0x06, 0x01});
+        CHECK(identityBuildId(ctl.proto) == "ab?c");
+    }
+    {
+        // The member code carries the board: 00 00 Terrarium, 01 00 HotHouse.
+        Fixture hh(defaultActiveText(), stubValidator, 0, false, "x", 1);
+        hh.send({0x7E, 0x7F, 0x06, 0x01});
+        CHECK(hh.proto.Reply()[8] == 0x01 && hh.proto.Reply()[9] == 0x00);
+        CHECK(identityBuildId(hh.proto) == "x");
+    }
+    {
+        // Not a session message: the session timer is not refreshed.
+        Fixture fx;
+        const std::string text = makeText(500);
+        fx.begin(500, Fnv1a32(text.data(), 500), 0);
+        CHECK(fx.status() == 0 && fx.proto.SessionActive());
+        fx.send({0x7E, 0x7F, 0x06, 0x01}, 4000);
+        CHECK(identityBuildId(fx.proto) == "1a2b3c4+dirty");
+        CHECK(fx.proto.SessionActive());
+        fx.proto.Tick(5000);
+        CHECK(!fx.proto.SessionActive());
+    }
+}
+
+static void testDfu() {
+    Fixture fx;
+    CHECK(fx.send(frame(0x08)) == UploadAction::Dfu);
+    CHECK(fx.replyCmd() == 0x48 && fx.status() == 0);
+    Bytes f = frame(0x08);
+    f.push_back(0x00);
+    CHECK(fx.send(f) == UploadAction::None);
+    CHECK(fx.status() == (int)UploadStatus::BadFrame);
+}
+
+// LOAD reports the last SetLoad() as three u14 fields; it is not a session message.
+static void testLoad() {
+    Fixture fx;
+    CHECK(fx.send(frame(0x09)) == UploadAction::None);
+    CHECK(fx.replyCmd() == 0x49 && fx.status() == 0 && fx.proto.ReplyLength() == 14);
+    const uint8_t* r = fx.proto.Reply();
+    CHECK(readU14(r + 6) == 0 && readU14(r + 8) == 0 && readU14(r + 10) == 0 && r[12] == 0);
+
+    fx.proto.SetLoad(CpuLoad{612, 1043, 3});
+    fx.proto.SetCurrentPreset(4);
+    const std::string text = makeText(500);
+    fx.begin(500, Fnv1a32(text.data(), 500), 0);
+    fx.send(frame(0x09), 4000);
+    r = fx.proto.Reply();
+    CHECK(readU14(r + 6) == 612 && readU14(r + 8) == 1043 && readU14(r + 10) == 3);
+    CHECK(r[12] == 4);  // currentPreset
+    fx.proto.Tick(5000);
+    CHECK(!fx.proto.SessionActive());  // the session timer was not refreshed
+
+    Bytes f = frame(0x09);
+    f.push_back(0x00);
+    CHECK(fx.send(f) == UploadAction::None);
+    CHECK(fx.status() == (int)UploadStatus::BadFrame);
 }
 
 int main(int argc, char** argv) {
@@ -558,6 +699,10 @@ int main(int argc, char** argv) {
     testSeqEdges();
     testSevenBitReplies();
     testFlashFailures();
+    testAssemblerBurst();
+    testIdentity();
+    testDfu();
+    testLoad();
     testEndToEnd(argv[1]);
     return CheckSummary("preset_protocol_test");
 }

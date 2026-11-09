@@ -23,7 +23,7 @@ constexpr int countOf(const T (&)[N])
     return (int)N;
 }
 
-// Signal-flow grouping of the 46 preset-controlled parameters. Must stay in sync
+// Signal-flow grouping of the 49 preset-controlled parameters. Must stay in sync
 // with the layout of presets.toml.
 const int kInputParams[] = {
     PARAM(InputMix), PARAM(PreDelay), PARAM(HiPassEnabled),
@@ -31,7 +31,7 @@ const int kInputParams[] = {
 
 const int kEarlyParams[] = {
     PARAM(TapCount), PARAM(TapLength), PARAM(TapGain), PARAM(TapDecay),
-    PARAM(Bloom)};
+    PARAM(Bloom), PARAM(Scatter), PARAM(ScatterRate), PARAM(ScatterDepth)};
 
 const int kEarlyDiffusionParams[] = {
     PARAM(DiffusionEnabled), PARAM(DiffusionStages), PARAM(DiffusionDelay),
@@ -85,7 +85,7 @@ constexpr int kGroupCount = countOf(kGroups);
 // DiffusionStages / LateDiffusionStages give 1 vs 2 allpass stages, since
 // AllpassDiffuser::MaxStageCount == 2). Continuous parameters are rejected.
 const int kToggleParams[] = {
-    PARAM(Bloom), PARAM(HiPassEnabled), PARAM(LowPassEnabled),
+    PARAM(Bloom), PARAM(Scatter), PARAM(HiPassEnabled), PARAM(LowPassEnabled),
     PARAM(DiffusionEnabled), PARAM(DiffusionStages), PARAM(LateDiffusionEnabled),
     PARAM(LateDiffusionStages), PARAM(LowShelfEnabled), PARAM(HighShelfEnabled),
     PARAM(CutoffEnabled), PARAM(LateStageTap), PARAM(Interpolation)};
@@ -100,7 +100,7 @@ bool isToggleParameter(int index)
     return false;
 }
 
-// Driven live by the "delay_lines.max" toggle target (default_delay_lines /
+// Driven live by the delay-line toggle targets (default_delay_lines /
 // max_delay_lines); never from a file.
 bool isRuntimeParameter(int index)
 {
@@ -263,7 +263,7 @@ bool readOptionalMs(const toml_table_t* table, const char* key, int index,
     return true;
 }
 
-bool parseParams(const toml_table_t* preset, int index, PresetData& out,
+bool parseParams(const toml_table_t* preset, Board board, int index, PresetData& out,
                  char* err, int errLen)
 {
     const toml_table_t* params = toml_table_in(preset, "params");
@@ -414,8 +414,10 @@ bool parseParams(const toml_table_t* preset, int index, PresetData& out,
                             out.reverseDirectMix, err, errLen))
         return false;
 
-    // [preset.params.delay_lines] max: stored state of the "delay_lines.max"
-    // toggle target.
+    // [preset.params.delay_lines]: stored state of the delay-line toggle targets.
+    // Terrarium: `max` ("delay_lines.max", Max when >= 0.5, else Default).
+    // HotHouse: `select` ("delay_lines.select", exactly 0 / 0.5 / 1 = One / Default /
+    // Max), the three positions of its toggle.
     const toml_table_t* delayLines = toml_table_in(params, "delay_lines");
     if (!delayLines)
     {
@@ -424,22 +426,43 @@ bool parseParams(const toml_table_t* preset, int index, PresetData& out,
         return false;
     }
 
-    static const char* const kDelayLinesKeys[] = {"max"};
+    const char* const delayLinesKey = board == Board_HotHouse ? "select" : "max";
     snprintf(context, sizeof context, "preset %d: [preset.params.delay_lines]: ",
              index);
-    if (!rejectUnknownKeys(delayLines, kDelayLinesKeys, countOf(kDelayLinesKeys),
-                           context, err, errLen))
+    if (!rejectUnknownKeys(delayLines, &delayLinesKey, 1, context, err, errLen))
         return false;
 
-    return readPseudoValue(delayLines, "delay_lines", "max", index,
-                           out.delayLinesMax, err, errLen);
+    float stored = 0.0f;
+    if (!readPseudoValue(delayLines, "delay_lines", delayLinesKey, index, stored, err,
+                         errLen))
+        return false;
+
+    if (board == Board_Terrarium)
+    {
+        out.delayLines = stored >= 0.5f ? DelayLines_Max : DelayLines_Default;
+        return true;
+    }
+
+    if (stored == 0.0f)
+        out.delayLines = DelayLines_One;
+    else if (stored == 0.5f)
+        out.delayLines = DelayLines_Default;
+    else if (stored == 1.0f)
+        out.delayLines = DelayLines_Max;
+    else
+    {
+        snprintf(err, errLen, "preset %d: 'delay_lines.select' must be 0, 0.5 or 1",
+                 index);
+        return false;
+    }
+    return true;
 }
 
 const char* const kKnobKeys[kControlBanks][kKnobCount] = {
     {"knob1_a", "knob2_a", "knob3_a", "knob4_a", "knob5_a", "knob6_a"},
     {"knob1_b", "knob2_b", "knob3_b", "knob4_b", "knob5_b", "knob6_b"}};
 
-const char* const kToggleKeys[kControlBanks][kToggleCount] = {
+const char* const kToggleKeys[kControlBanks][kMaxToggles] = {
     {"toggle1_a", "toggle2_a", "toggle3_a", "toggle4_a"},
     {"toggle1_b", "toggle2_b", "toggle3_b", "toggle4_b"}};
 
@@ -541,9 +564,11 @@ bool parseKnobTarget(const char* text, const char* key, int index,
     return true;
 }
 
-// Resolves "delay_lines.max", "reverse.enabled", "reverse.direct_mix" or an
-// on/off "group.Param" (kToggleParams) into a ToggleTarget.
-bool parseToggleTarget(const char* text, const char* key, int index,
+// Resolves a toggle target: an on/off "group.Param" (kToggleParams), one of the
+// binary pseudo-targets "delay_lines.max", "reverse.enabled", "reverse.direct_mix",
+// or (HotHouse only) one of the three-way pseudo-targets "delay_lines.select",
+// "early.envelope", "reverse.mode".
+bool parseToggleTarget(const char* text, Board board, const char* key, int index,
                        ToggleTarget& out, char* err, int errLen)
 {
     size_t      groupLen = 0;
@@ -553,31 +578,51 @@ bool parseToggleTarget(const char* text, const char* key, int index,
 
     out.paramIndex = 0;
 
+    bool known = true;
     if (groupIs(text, groupLen, "delay_lines"))
     {
-        if (strcmp(name, "max") != 0)
+        if (strcmp(name, "max") == 0)
+            out.kind = ToggleTarget_DelayLinesMax;
+        else if (strcmp(name, "select") == 0)
+            out.kind = ToggleTarget_DelayLinesSelect;
+        else
         {
             snprintf(err, errLen,
-                     "preset %d: toggle_map: %s: 'delay_lines' has only 'max'",
+                     "preset %d: toggle_map: %s: 'delay_lines' toggles only 'max' "
+                     "or 'select'",
                      index, key);
             return false;
         }
-        out.kind = ToggleTarget_DelayLinesMax;
-        return true;
     }
-
-    if (groupIs(text, groupLen, "reverse"))
+    else if (groupIs(text, groupLen, "reverse"))
     {
         if (strcmp(name, "enabled") == 0)
             out.kind = ToggleTarget_ReverseEnabled;
         else if (strcmp(name, "direct_mix") == 0)
             out.kind = ToggleTarget_ReverseDirectMix;
+        else if (strcmp(name, "mode") == 0)
+            out.kind = ToggleTarget_ReverseMode;
         else
         {
             snprintf(err, errLen,
                      "preset %d: toggle_map: %s: 'reverse' toggles only "
-                     "'enabled' or 'direct_mix'",
+                     "'enabled', 'direct_mix' or 'mode'",
                      index, key);
+            return false;
+        }
+    }
+    else if (groupIs(text, groupLen, "early") && strcmp(name, "envelope") == 0)
+        out.kind = ToggleTarget_EarlyEnvelope;
+    else
+        known = false;
+
+    if (known)
+    {
+        if (IsThreeWayToggleTarget(out.kind) && board != Board_HotHouse)
+        {
+            snprintf(err, errLen,
+                     "preset %d: toggle_map: %s: '%s' needs a three-position toggle",
+                     index, key, text);
             return false;
         }
         return true;
@@ -646,7 +691,7 @@ bool parseKnobMap(const toml_table_t* preset, int index, PresetData& out,
     return true;
 }
 
-bool parseToggleMap(const toml_table_t* preset, int index, PresetData& out,
+bool parseToggleMap(const toml_table_t* preset, Board board, int index, PresetData& out,
                     char* err, int errLen, void (*dealloc)(void*))
 {
     const toml_table_t* map = toml_table_in(preset, "toggle_map");
@@ -656,20 +701,23 @@ bool parseToggleMap(const toml_table_t* preset, int index, PresetData& out,
         return false;
     }
 
-    const char* allowed[kControlBanks * kToggleCount];
+    const int toggleCount = ToggleCount(board);
+    const char* allowed[kControlBanks * kMaxToggles];
     for (int b = 0; b < kControlBanks; b++)
-        for (int t = 0; t < kToggleCount; t++)
-            allowed[b * kToggleCount + t] = kToggleKeys[b][t];
+        for (int t = 0; t < toggleCount; t++)
+            allowed[b * toggleCount + t] = kToggleKeys[b][t];
 
     char context[48];
     snprintf(context, sizeof context, "preset %d: [preset.toggle_map]: ", index);
-    if (!rejectUnknownKeys(map, allowed, kControlBanks * kToggleCount, context,
+    if (!rejectUnknownKeys(map, allowed, kControlBanks * toggleCount, context,
                            err, errLen))
         return false;
 
     for (int b = 0; b < kControlBanks; b++)
     {
-        for (int t = 0; t < kToggleCount; t++)
+        for (int t = toggleCount; t < kMaxToggles; t++)
+            out.toggleMap[b][t] = ToggleTarget{ToggleTarget_Param, 0};
+        for (int t = 0; t < toggleCount; t++)
         {
             toml_datum_t value = toml_string_in(map, kToggleKeys[b][t]);
             if (!value.ok)
@@ -680,7 +728,7 @@ bool parseToggleMap(const toml_table_t* preset, int index, PresetData& out,
                 return false;
             }
 
-            const bool ok = parseToggleTarget(value.u.s, kToggleKeys[b][t], index,
+            const bool ok = parseToggleTarget(value.u.s, board, kToggleKeys[b][t], index,
                                               out.toggleMap[b][t], err, errLen);
             dealloc(value.u.s);
             if (!ok)
@@ -691,7 +739,7 @@ bool parseToggleMap(const toml_table_t* preset, int index, PresetData& out,
     return true;
 }
 
-bool parsePreset(const toml_table_t* preset, int index, PresetData& out,
+bool parsePreset(const toml_table_t* preset, Board board, int index, PresetData& out,
                  char* err, int errLen, void (*dealloc)(void*))
 {
     static const char* const kPresetKeys[] = {
@@ -762,16 +810,53 @@ bool parsePreset(const toml_table_t* preset, int index, PresetData& out,
         return false;
     }
 
-    if (!parseParams(preset, index, out, err, errLen))
+    if (!parseParams(preset, board, index, out, err, errLen))
         return false;
 
     return parseKnobMap(preset, index, out, err, errLen, dealloc)
-           && parseToggleMap(preset, index, out, err, errLen, dealloc);
+           && parseToggleMap(preset, board, index, out, err, errLen, dealloc);
 }
 
-bool parseRoot(const toml_table_t* root, PresetBank& bank, char* err, int errLen,
-               void (*dealloc)(void*))
+// The root key `board` names the pedal the bank is written for; it is checked
+// first, so a bank for the other board fails with this message rather than with a
+// schema error further down.
+bool checkBoard(const toml_table_t* root, Board board, char* err, int errLen,
+                void (*dealloc)(void*))
 {
+    toml_datum_t value = toml_string_in(root, "board");
+    if (!value.ok)
+    {
+        snprintf(err, errLen, "missing board = \"%s\"", BoardName(board));
+        return false;
+    }
+
+    char name[16];
+    snprintf(name, sizeof name, "%s", value.u.s);
+    const bool known = strcmp(value.u.s, BoardName(Board_Terrarium)) == 0
+                       || strcmp(value.u.s, BoardName(Board_HotHouse)) == 0;
+    const bool match = strcmp(value.u.s, BoardName(board)) == 0;
+    dealloc(value.u.s);
+
+    if (!known)
+    {
+        snprintf(err, errLen, "board '%s' is not \"terrarium\" or \"hothouse\"", name);
+        return false;
+    }
+    if (!match)
+    {
+        snprintf(err, errLen, "bank is for board \"%s\", this pedal is \"%s\"", name,
+                 BoardName(board));
+        return false;
+    }
+    return true;
+}
+
+bool parseRoot(const toml_table_t* root, Board board, PresetBank& bank, char* err,
+               int errLen, void (*dealloc)(void*))
+{
+    if (!checkBoard(root, board, err, errLen, dealloc))
+        return false;
+
     const toml_array_t* presets = toml_array_in(root, "preset");
     if (!presets)
     {
@@ -787,7 +872,7 @@ bool parseRoot(const toml_table_t* root, PresetBank& bank, char* err, int errLen
         return false;
     }
 
-    static const char* const kRootKeys[] = {"preset"};
+    static const char* const kRootKeys[] = {"board", "preset"};
     if (!rejectUnknownKeys(root, kRootKeys, countOf(kRootKeys), "", err, errLen))
         return false;
 
@@ -800,7 +885,7 @@ bool parseRoot(const toml_table_t* root, PresetBank& bank, char* err, int errLen
             return false;
         }
 
-        if (!parsePreset(preset, i, bank.presets[i], err, errLen, dealloc))
+        if (!parsePreset(preset, board, i, bank.presets[i], err, errLen, dealloc))
             return false;
     }
 
@@ -838,10 +923,16 @@ bool checkAscii(const char* toml, char* err, int errLen)
 
 }  // namespace
 
-bool ParsePresetBank(char* toml, PresetBank& bank, char* err, int errLen,
+const char* BoardName(Board board)
+{
+    return board == Board_HotHouse ? "hothouse" : "terrarium";
+}
+
+bool ParsePresetBank(char* toml, Board board, PresetBank& bank, char* err, int errLen,
                      void* (*alloc)(size_t), void (*dealloc)(void*))
 {
     bank.count = 0;
+    bank.board = board;
     if (errLen > 0)
         err[0] = '\0';
 
@@ -858,7 +949,7 @@ bool ParsePresetBank(char* toml, PresetBank& bank, char* err, int errLen,
         return false;
     }
 
-    const bool ok = parseRoot(root, bank, err, errLen, dealloc);
+    const bool ok = parseRoot(root, board, bank, err, errLen, dealloc);
     toml_free(root);
 
     if (!ok)
@@ -867,8 +958,9 @@ bool ParsePresetBank(char* toml, PresetBank& bank, char* err, int errLen,
     return ok;
 }
 
-bool ParsePresetBankText(const char* text, uint32_t length, PresetBank& bank, char* err,
-                         int errLen, void* (*alloc)(size_t), void (*dealloc)(void*))
+bool ParsePresetBankText(const char* text, uint32_t length, Board board, PresetBank& bank,
+                         char* err, int errLen, void* (*alloc)(size_t),
+                         void (*dealloc)(void*))
 {
     bank.count = 0;
     if (length == 0)
@@ -891,7 +983,7 @@ bool ParsePresetBankText(const char* text, uint32_t length, PresetBank& bank, ch
     }
     memcpy(scratch, text, length);
     scratch[length] = '\0';
-    const bool ok = ParsePresetBank(scratch, bank, err, errLen, alloc, dealloc);
+    const bool ok = ParsePresetBank(scratch, board, bank, err, errLen, alloc, dealloc);
     dealloc(scratch);
     return ok;
 }
