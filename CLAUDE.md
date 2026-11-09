@@ -871,7 +871,7 @@ Then `make libs` once (and after every submodule update), then `make` (or `make 
 
 ```bash
 # Rebuild all libraries (libcloudseed, DaisySP, libdaisy).
-# Makefile:184-187 runs `clean all` in each, so this is a full rebuild of all three.
+# Makefile:196-199 runs `clean all` in each, so this is a full rebuild of all three.
 make libs
 
 # Or build individually:
@@ -1020,6 +1020,10 @@ Located in `build/<board>/` (`build/terrarium/` or `build/hothouse/`):
 
 Located in `build/`:
 - **build_id.c** - the generated build id (shared by both boards)
+- **release/cloudseed-terrarium.bin**, **release/cloudseed-hothouse.bin** - `make release`
+  (`Makefile:184-194`) runs `make BOARD=terrarium` then `make BOARD=hothouse` (one after the
+  other: they share `build/build_id.c` and the CloudSeed sub-make) and copies each board's
+  `cloudseed.bin` here under a board-specific name, for GitHub release assets
 - **editor.html** - the browser editor as one stand-alone file (`make editor-html`: runs
   `make -C editor html`, a `Bun.build` with `compile: true, target: "browser"` in
   editor/build.ts, then copies editor/dist/editor.html here; JS/CSS and both boards' preset
@@ -1922,6 +1926,7 @@ make program-boot  # One time: flash the Daisy bootloader (BOOT_SRAM prerequisit
 make program-dfu   # Flash the app (reset, hold BOOT until rapid blink, then run; BOARD=hothouse for the HotHouse)
 make editor        # Browser preset editor: make -C editor serve (bun install + dev server, http://localhost:5174); needs Bun
 make editor-html   # Browser preset editor as one stand-alone file: build/editor.html (opens from file://)
+make release       # Both boards, copied to build/release/cloudseed-{terrarium,hothouse}.bin
 make -C editor test check   # the editor's tests, tsc and Biome (not part of make test)
 ```
 

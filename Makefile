@@ -181,6 +181,18 @@ editor-html:
 
 .PHONY: editor editor-html
 
+# Both boards' firmware under distinct names, for a GitHub release. The two builds run one
+# after the other: they share build/build_id.c and the CloudSeed sub-make.
+RELEASE_DIR = build/release
+release:
+	$(MAKE) BOARD=terrarium
+	$(MAKE) BOARD=hothouse
+	mkdir -p $(RELEASE_DIR)
+	cp build/terrarium/$(TARGET).bin $(RELEASE_DIR)/$(TARGET)-terrarium.bin
+	cp build/hothouse/$(TARGET).bin $(RELEASE_DIR)/$(TARGET)-hothouse.bin
+
+.PHONY: release
+
 libs:
 	$(MAKE) -C CloudSeed clean all
 	$(MAKE) -C DaisySP clean all

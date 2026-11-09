@@ -88,6 +88,7 @@ Then build the daisy libraries once, and the firmware, from the repo root:
 make libs
 make                 # Terrarium: build/terrarium/cloudseed.bin, embeds presets.toml
 make BOARD=hothouse  # HotHouse: build/hothouse/cloudseed.bin, embeds presets_hothouse.toml
+make release         # both boards: build/release/cloudseed-terrarium.bin, cloudseed-hothouse.bin
 ```
 `make` rebuilds the CloudSeed library itself when its sources change; `make libs` is only needed
 again after a submodule update. `make test` runs the host unit tests.
